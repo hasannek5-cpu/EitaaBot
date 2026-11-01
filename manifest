@@ -1,1 +1,16 @@
 
+
+{
+  "id": "./",
+  "name": "کالای آشپزخانه لوکس",
+  "short_name": "کالای لوکس",
+  "description": "ثبت و مدیریت سفارش‌های کالای آشپزخانه لوکس",
+  "lang": "fa",
+  "dir": "rtl",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#101827",
+  "theme_color": "#101827"
+}
