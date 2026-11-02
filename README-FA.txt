@@ -1,17 +1,8 @@
-فایل‌های PWA کالای آشپزخانه لوکس
+بسته اصلاحات کالای آشپزخانه لوکس
 
-این فایل‌ها را در ریشه مخزن EitaaBot (کنار Main.py) بارگذاری کنید:
-- manifest.json
-- sw.js
-- icon-192.png
-- icon-512.png
-
-در Main.py داخل HTML، لینک manifest باید به شکل <link rel="manifest" href="/manifest.json"> باشد.
-برای ثبت Service Worker پیش از </body> اضافه کنید:
-<script>
-if ('serviceWorker' in navigator) {
-  window.addEventListener('load', () => navigator.serviceWorker.register('/sw.js'));
-}
-</script>
-
-این فایل ZIP به‌تنهایی APK نیست؛ پس از قرار دادن فایل‌ها، سایت را در PWABuilder بسته‌بندی کنید.
+1) render.yaml را با فایل render.yaml داخل بسته جایگزین کنید.
+2) static/manifest.json و static/sw.js را در مخزن قرار دهید.
+3) در Main.py مقدار EITAA_TOKEN را طوری تنظیم کنید که EITAA_BOT_TOKEN قدیمی را هم بخواند:
+EITAA_TOKEN = os.environ.get("EITAA_TOKEN", os.environ.get("EITAA_BOT_TOKEN", "")).strip()
+4) سرویس Render باید Web Service باشد و پس از Deploy یک URL عمومی بدهد.
+5) برای APK، URL سرویس را در PWABuilder وارد و Android Package را بسازید.
