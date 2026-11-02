@@ -2,7 +2,6 @@ import os
 import sqlite3
 import uuid
 from datetime import datetime, timezone
-from html import escape
 
 import requests
 from flask import Flask, jsonify, request, render_template_string
@@ -15,6 +14,7 @@ ADMIN_PANEL_KEY = os.environ.get("ADMIN_PANEL_KEY", "").strip()
 
 PAGE = """<!doctype html><html lang="fa" dir="rtl"><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
+<link rel="manifest" href="/manifest.json">
 <title>کالای آشپزخانه لوکس | ثبت سفارش</title>
 <style>
 body{font-family:Tahoma,Arial;background:#f4f6f8;margin:0;padding:22px;color:#172033}
@@ -42,7 +42,53 @@ try{const x=await fetch('/order',{method:'POST',headers:{'Content-Type':'applica
 const j=await x.json();if(!x.ok)throw new Error(j.error||'خطا');r.textContent=j.message;e.target.reset();
 }catch(err){r.textContent='خطا: '+err.message;}finally{b.disabled=false;}
 });
+if('serviceWorker' in navigator){navigator.serviceWorker.register('/sw.js').catch(()=>{});}
 </script></html>"""
+
+ADMIN_PAGE = """<!doctype html><html lang="fa" dir="rtl"><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1"><title>مدیریت سفارش‌ها</title>
+<style>
+*{box-sizing:border-box}body{font:14px Tahoma;background:#f1f4f8;color:#172033;margin:0;padding:14px}
+header,.login,.order{background:#fff;border-radius:14px;padding:15px;margin:0 0 12px;box-shadow:0 2px 10px #00008}
+h1{font-size:20px;margin:4px 0 12px}.top{display:flex;gap:8px}.top button{flex:1}
+input,button,select{font:inherit;padding:11px;border-radius:8px;border:1px solid #ccd4dc}
+input{width:100%;margin:8px 0}button{background:#176b50;color:white;border:0;cursor:pointer}
+.order h3{margin:0 0 8px;color:#176b50}.order p{margin:7px 0;overflow-wrap:anywhere}
+.order select{width:100%;margin-top:8px;background:white}.order button{width:100%;margin-top:8px}
+#msg{padding:8px;white-space:pre-wrap}
+</style>
+<header><h1>پنل مدیریت سفارش‌ها</h1><div class="top"><button id="refresh">بروزرسانی</button><button id="logout">خروج</button></div></header>
+<section class="login" id="login"><label>کلید مدیریت (ADMIN_PANEL_KEY)</label><input id="key" type="password" autocomplete="current-password"><button id="enter">ورود</button></section>
+<div id="msg" role="status"></div><section id="orders"></section>
+<script>
+const $=id=>document.getElementById(id);let key=sessionStorage.getItem('admin_key')||'';
+const statuses=['جدید','در حال آماده‌سازی','ارسال شد','تحویل شد','لغو شد'];
+function el(tag,text){const n=document.createElement(tag);if(text!==undefined)n.textContent=text;return n}
+async function api(path,body){const r=await fetch(path,{method:body?'POST':'GET',headers:{'X-Admin-Key':key,'Content-Type':'application/json'},body:body?JSON.stringify(body):undefined});const j=await r.json();if(!r.ok)throw Error(j.error||'خطا');return j}
+function showLogin(){$('login').style.display=key?'none':'block'}
+async function load(){try{const j=await api('/admin/orders');$('orders').replaceChildren();$('msg').textContent=j.orders.length+' سفارش';
+j.orders.forEach(o=>{const card=el('article');card.className='order';card.append(el('h3','سفارش '+o.id));
+card.append(el('p','تاریخ: '+new Date(o.created_at).toLocaleString('fa-IR')));
+[['کالا',o.product],['نام',o.customer_name],['تماس',o.phone],['تعداد',o.quantity],['نشانی',o.address],['توضیحات',o.notes||'—'],['وضعیت فعلی',o.status],['اطلاع ایتا',o.notified?'ارسال شد':'ارسال نشده']].forEach(([a,b])=>card.append(el('p',a+': '+b)));
+const sel=el('select');statuses.forEach(x=>{const op=el('option',x);op.value=x;op.selected=x===o.status;sel.append(op)});card.append(sel);
+const save=el('button','ثبت وضعیت');save.onclick=async()=>{try{await api('/admin/status',{order_id:o.id,status:sel.value});$('msg').textContent='وضعیت ذخیره شد';await load()}catch(e){$('msg').textContent=e.message}};card.append(save);$('orders').append(card)})}
+catch(e){$('msg').textContent=e.message;if(e.message.includes('غیرمجاز')){key='';sessionStorage.removeItem('admin_key');showLogin()}}}
+$('enter').onclick=()=>{key=$('key').value;sessionStorage.setItem('admin_key',key);showLogin();load()};
+$('refresh').onclick=load;$('logout').onclick=()=>{key='';sessionStorage.removeItem('admin_key');showLogin();$('orders').replaceChildren();$('msg').textContent='خارج شدید'};
+showLogin();if(key)load();
+</script></html>"""
+
+@app.get("/")
+def index():
+    return render_template_string(PAGE)
+
+@app.get("/admin")
+def admin_page():
+    return render_template_string(ADMIN_PAGE)
+
+@app.get("/health")
+def health():
+    return jsonify(ok=True, service="KalayIra order form")
 
 def connect_db():
     c = sqlite3.connect(DB_PATH)
@@ -60,14 +106,9 @@ def init_db():
 def notify_eitaa(message):
     if not EITAA_TOKEN or not EITAA_CHAT_ID:
         return False, "EITAA_TOKEN یا EITAA_CHAT_ID تنظیم نشده"
-    # Official Eitaa app API endpoint documented by Eitaa.
     url = "https://eitaayar.ir/api/app/sendMessage"
     try:
-        r = requests.post(url, json={
-            "token": EITAA_TOKEN,
-            "chat_id": EITAA_CHAT_ID,
-            "text": message
-        }, timeout=20)
+        r = requests.post(url, json={"token": EITAA_TOKEN,"chat_id": EITAA_CHAT_ID,"text": message}, timeout=20)
         r.raise_for_status()
         result = r.json()
         return result.get("ok") is True, str(result.get("description", ""))
@@ -75,79 +116,47 @@ def notify_eitaa(message):
         app.logger.exception("Eitaa notification failed")
         return False, str(exc)
 
-@app.get("/")
-def index():
-    return render_template_string(PAGE)
-
-@app.get("/health")
-def health():
-    return jsonify(ok=True, service="KalayIra order form")
-
 @app.post("/order")
 def create_order():
     d = request.get_json(silent=True) or {}
-    fields = {k: str(d.get(k, "")).strip() for k in
-              ("product", "customer_name", "phone", "address", "notes")}
-    try:
-        quantity = int(d.get("quantity", 1))
-    except (TypeError, ValueError):
-        return jsonify(error="تعداد باید عدد باشد"), 400
-    if any(not fields[k] for k in ("product", "customer_name", "phone", "address")):
+    fields = {k: str(d.get(k, "")).strip() for k in ("product","customer_name","phone","address","notes")}
+    try: quantity = int(d.get("quantity", 1))
+    except (TypeError, ValueError): return jsonify(error="تعداد باید عدد باشد"), 400
+    if any(not fields[k] for k in ("product","customer_name","phone","address")):
         return jsonify(error="فیلدهای ضروری را تکمیل کنید"), 400
-    if not 1 <= quantity <= 999:
-        return jsonify(error="تعداد باید بین ۱ تا ۹۹۹ باشد"), 400
-    limits = {"product":120, "customer_name":100, "phone":30, "address":700, "notes":700}
-    if any(len(fields[k]) > limits[k] for k in limits):
-        return jsonify(error="یکی از فیلدها بیش از حد طولانی است"), 400
-
-    oid = uuid.uuid4().hex[:8].upper()
-    created = datetime.now(timezone.utc).isoformat()
+    if not 1 <= quantity <= 999: return jsonify(error="تعداد باید بین ۱ تا ۹۹۹ باشد"), 400
+    limits={"product":120,"customer_name":100,"phone":30,"address":700,"notes":700}
+    if any(len(fields[k])>limits[k] for k in limits): return jsonify(error="یکی از فیلدها بیش از حد طولانی است"), 400
+    oid=uuid.uuid4().hex[:8].upper();created=datetime.now(timezone.utc).isoformat()
     with connect_db() as c:
-        c.execute("""INSERT INTO orders
-        (id,created_at,product,customer_name,phone,address,quantity,notes)
-        VALUES(?,?,?,?,?,?,?,?)""",
-        (oid, created, fields["product"], fields["customer_name"], fields["phone"],
-         fields["address"], quantity, fields["notes"]))
-
-    msg = (f"🛍 سفارش جدید | کالای آشپزخانه لوکس\nشماره: {oid}\n"
-           f"کالا: {fields['product']}\nنام: {fields['customer_name']}\n"
-           f"تماس: {fields['phone']}\nتعداد: {quantity}\n"
-           f"نشانی: {fields['address']}\nتوضیحات: {fields['notes'] or 'ندارد'}\nوضعیت: جدید")
-    sent, error = notify_eitaa(msg)
-    with connect_db() as c:
-        c.execute("UPDATE orders SET notified=? WHERE id=?", (int(sent), oid))
-    if sent:
-        return jsonify(ok=True, order_id=oid, message=f"سفارش {oid} ثبت و اطلاع‌رسانی شد.")
-    app.logger.error("Order %s saved; notification not sent: %s", oid, error)
-    return jsonify(ok=True, order_id=oid,
-                   message=f"سفارش {oid} ثبت شد؛ اما اطلاع‌رسانی ایتا انجام نشد و مدیر باید تنظیمات را بررسی کند."), 202
+        c.execute("""INSERT INTO orders (id,created_at,product,customer_name,phone,address,quantity,notes)
+        VALUES(?,?,?,?,?,?,?,?)""",(oid,created,fields["product"],fields["customer_name"],fields["phone"],fields["address"],quantity,fields["notes"]))
+    msg=(f"🛍 سفارش جدید | کالای آشپزخانه لوکس\\nشماره: {oid}\\nکالا: {fields['product']}\\nنام: {fields['customer_name']}\\nتماس: {fields['phone']}\\nتعداد: {quantity}\\nنشانی: {fields['address']}\\nتوضیحات: {fields['notes'] or 'ندارد'}\\nوضعیت: جدید")
+    sent,error=notify_eitaa(msg)
+    with connect_db() as c:c.execute("UPDATE orders SET notified=? WHERE id=?",(int(sent),oid))
+    if sent:return jsonify(ok=True,order_id=oid,message=f"سفارش {oid} ثبت و اطلاع‌رسانی شد.")
+    app.logger.error("Order %s saved; notification not sent: %s",oid,error)
+    return jsonify(ok=True,order_id=oid,message=f"سفارش {oid} ثبت شد؛ اما اطلاع‌رسانی ایتا انجام نشد و مدیر باید تنظیمات را بررسی کند."),202
 
 def is_admin():
-    return bool(ADMIN_PANEL_KEY) and request.headers.get("X-Admin-Key", "") == ADMIN_PANEL_KEY
+    return bool(ADMIN_PANEL_KEY) and request.headers.get("X-Admin-Key","")==ADMIN_PANEL_KEY
 
 @app.get("/admin/orders")
 def list_orders():
-    if not is_admin():
-        return jsonify(error="دسترسی غیرمجاز"), 401
-    with connect_db() as c:
-        rows = c.execute("SELECT * FROM orders ORDER BY created_at DESC LIMIT 100").fetchall()
+    if not is_admin():return jsonify(error="دسترسی غیرمجاز"),401
+    with connect_db() as c:rows=c.execute("SELECT * FROM orders ORDER BY created_at DESC LIMIT 100").fetchall()
     return jsonify(orders=[dict(x) for x in rows])
 
 @app.post("/admin/status")
 def set_status():
-    if not is_admin():
-        return jsonify(error="دسترسی غیرمجاز"), 401
-    d = request.get_json(silent=True) or {}
-    oid, status = str(d.get("order_id", "")).strip(), str(d.get("status", "")).strip()
-    allowed = ("جدید", "در حال آماده‌سازی", "ارسال شد", "تحویل شد", "لغو شد")
-    if not oid or status not in allowed:
-        return jsonify(error="شماره سفارش یا وضعیت نامعتبر است"), 400
-    with connect_db() as c:
-        cur = c.execute("UPDATE orders SET status=? WHERE id=?", (status, oid))
-    if not cur.rowcount:
-        return jsonify(error="سفارش پیدا نشد"), 404
-    return jsonify(ok=True, order_id=oid, status=status)
+    if not is_admin():return jsonify(error="دسترسی غیرمجاز"),401
+    d=request.get_json(silent=True) or {};oid=str(d.get("order_id","")).strip();status=str(d.get("status","")).strip()
+    allowed=("جدید","در حال آماده‌سازی","ارسال شد","تحویل شد","لغو شد")
+    if not oid or status not in allowed:return jsonify(error="شماره سفارش یا وضعیت نامعتبر است"),400
+    with connect_db() as c:cur=c.execute("UPDATE orders SET status=? WHERE id=?",(status,oid))
+    if not cur.rowcount:return jsonify(error="سفارش پیدا نشد"),404
+    return jsonify(ok=True,order_id=oid,status=status)
 
 init_db()
-if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=int(os.environ.get("PORT", "10000")))
+if __name__=="__main__":
+    app.run(host="0.0.0.0",port=int(os.environ.get("PORT","10000")))
