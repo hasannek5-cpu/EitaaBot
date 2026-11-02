@@ -1,9 +1,16 @@
-
 {
-  "id": "/",
+  "background_color": "#ffffff",
+  "dir": "ltr",
+  "display": "standalone",
   "name": "کالای آشپزخانه لوکس",
-  "short_name": "کالای لوکس",
-  "description": "اپلیکیشن مدیریت سفارشات و فروش کالای آشپزخانه لوکس",
+  "orientation": "any",
+  "scope": "/",
+  "short_name": "کالای آشپزخانه",
+  "start_url": "/",
+  "theme_color": "#ffffff",
+  "description": "برنامه ثبت و مدیریت"
+}
+  "id": "/",
   "lang": "fa",
   "dir": "rtl",
   "start_url": "/",
