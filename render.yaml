@@ -1,1 +1,20 @@
-Flask>=3.0,<4 requests>=2.31,<3 gunicorn>=22,<24
+
+services:
+  - type: worker
+    name: kalay-eitaa-bot
+    runtime: python
+    buildCommand: pip install -r requirements.txt
+    startCommand: python Main.py
+
+    disk:
+      name: kalay-orders-data
+      mountPath: /var/data
+      sizeGB: 1
+
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.11.9
+      - key: DATABASE_PATH
+        value: /var/data/orders.db
+      - key: EITAA_BOT_TOKEN
+        sync: false
