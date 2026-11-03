@@ -6,6 +6,10 @@ services:
     buildCommand: pip install -r requirements.txt
     startCommand: gunicorn Main:app
     plan: free
+    disk:
+      name: orders-disk
+      mountPath: /var/data
+      sizeGB: 1
     envVars:
       - key: PYTHON_VERSION
         value: 3.11.9
