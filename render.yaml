@@ -1,20 +1,19 @@
 
 services:
-  - type: worker
-    name: kalay-eitaa-bot
+  - type: web
+    name: kalay-kitchen-luxury
     runtime: python
     buildCommand: pip install -r requirements.txt
-    startCommand: python Main.py
-
-    disk:
-      name: kalay-orders-data
-      mountPath: /var/data
-      sizeGB: 1
-
+    startCommand: gunicorn Main:app
+    plan: free
     envVars:
       - key: PYTHON_VERSION
         value: 3.11.9
       - key: DATABASE_PATH
         value: /var/data/orders.db
-      - key: EITAA_BOT_TOKEN
+      - key: EITAA_TOKEN
+        sync: false
+      - key: EITAA_CHAT_ID
+        sync: false
+      - key: ADMIN_PANEL_KEY
         sync: false
