@@ -1,18 +1,11 @@
 
 services:
   - type: web
-    name: kalay-eitaa-bot
+    name: kalay-kitchen-luxury
     runtime: python
-    plan: free
     buildCommand: pip install -r requirements.txt
     startCommand: gunicorn Main:app
-    healthCheckPath: /health
-
-    disk:
-      name: kalay-orders-data
-      mountPath: /var/data
-      sizeGB: 1
-
+    plan: free
     envVars:
       - key: PYTHON_VERSION
         value: 3.11.9
@@ -24,4 +17,3 @@ services:
         sync: false
       - key: ADMIN_PANEL_KEY
         sync: false
-
