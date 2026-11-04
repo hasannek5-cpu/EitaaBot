@@ -1,15 +1,1 @@
-
-{
-  "id": "/",
-  "name": "کالای آشپزخانه لوکس",
-  "short_name": "کالای آشپزخانه",
-  "description": "فروش آنلاین کالای آشپزخانه لوکس و ثبت سفارش",
-  "lang": "fa",
-  "dir": "rtl",
-  "display": "standalone",
-  "orientation": "any",
-  "scope": "/",
-  "start_url": "/",
-  "background_color": "#ffffff",
-  "theme_color": "#ffffff"
-}
+{ "background_color": "#ffffff", "dir": "ltr", "display": "standalone", "name": "کالای آشپزخانه لوکس", "orientation": "any", "scope": "/", "short_name": "کالای آشپزخانه", "start_url": "/", "theme_color": "#ffffff", "id": "/", "description": "فروش آنلاین کالای آشپزخانه لوکس و ثبت سفارش" }
