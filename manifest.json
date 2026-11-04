@@ -1,29 +1,14 @@
-
 {
-  "id": "/",
-  "name": "کالای آشپزخانه لوکس",
-  "short_name": "کالای آشپزخانه",
-  "description": "فروش آنلاین کالای آشپزخانه لوکس و ثبت سفارش",
-  "lang": "fa",
-  "dir": "rtl",
-  "display": "standalone",
-  "orientation": "portrait",
-  "scope": "/",
-  "start_url": "/",
   "background_color": "#ffffff",
+  "dir": "ltr",
+  "display": "standalone",
+  "name": "EITAA.BOT",
+  "orientation": "any",
+  "scope": "//",
+  "short_name": "کالای آشپزخانه لوکس",
+  "start_url": "//",
   "theme_color": "#ffffff",
-  "icons": [
-    {
-      "src": "/static/icon-192.png",
-      "sizes": "192x192",
-      "type": "image/png",
-      "purpose": "any"
-    },
-    {
-      "src": "/static/icon-512.png",
-      "sizes": "512x512",
-      "type": "image/png",
-      "purpose": "any"
-    }
-  ]
+  "id": "Eitaabot",
+  "description": "مدیریت ثبت و سعارش کالای آشپزخان لوکس",
+  "lang": "fa"
 }
