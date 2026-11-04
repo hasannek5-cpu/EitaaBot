@@ -6,7 +6,7 @@ from datetime import datetime, timezone
 import requests
 import psycopg
 from psycopg.rows import dict_row
-from flask import Flask, jsonify, request, render_template_string
+from flask import Flask, jsonify, request, render_template_string, send_from_directory, Response
 
 app = Flask(__name__)
 
@@ -20,9 +20,12 @@ ADMIN_PANEL_KEY = os.environ.get("ADMIN_PANEL_KEY", "").strip()
 
 PAGE = """<!doctype html>
 <html lang="fa" dir="rtl">
+<head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="theme-color" content="#ffffff">
 <link rel="manifest" href="/manifest.json">
+<link rel="icon" href="/icon-192.png">
 <title>کالای آشپزخانه لوکس | ثبت سفارش</title>
 <style>
 body{font-family:Tahoma,Arial;background:#f4f6f8;margin:0;padding:22px;color:#172033}
@@ -34,6 +37,8 @@ input,textarea{box-sizing:border-box;width:100%;padding:13px;border:1px solid #c
 button{margin-top:20px;width:100%;padding:14px;background:#176b50;color:white;border:0;border-radius:9px;font:inherit;font-weight:bold}
 #result{margin-top:15px;white-space:pre-wrap}
 </style>
+</head>
+<body>
 <main>
 <h1>کالای آشپزخانه لوکس</h1>
 <p>فرم ثبت سفارش</p>
@@ -83,11 +88,13 @@ if('serviceWorker' in navigator){
     navigator.serviceWorker.register('/sw.js').catch(()=>{});
 }
 </script>
+</body>
 </html>"""
 
 
 ADMIN_PAGE = """<!doctype html>
 <html lang="fa" dir="rtl">
+<head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>مدیریت سفارش‌ها</title>
@@ -107,6 +114,8 @@ button{background:#176b50;color:white;border:0;cursor:pointer}
 .order button{width:100%;margin-top:8px}
 #msg{padding:8px;white-space:pre-wrap}
 </style>
+</head>
+<body>
 <header>
 <h1>پنل مدیریت سفارش‌ها</h1>
 <div class="top">
@@ -230,20 +239,46 @@ $('logout').onclick=()=>{
 showLogin();
 if(key)load();
 </script>
+</body>
 </html>"""
+
+
+# فایل manifest.json و آیکون‌ها از ریشه مخزن/برنامه ارائه می‌شوند.
+@app.get("/manifest.json")
+def manifest_file():
+    return send_from_directory(
+        app.root_path,
+        "manifest.json",
+        mimetype="application/manifest+json"
+    )
+
+
+@app.get("/icon-192.png")
+def icon_192():
+    return send_from_directory(app.root_path, "icon-192.png", mimetype="image/png")
+
+
+@app.get("/icon-512.png")
+def icon_512():
+    return send_from_directory(app.root_path, "icon-512.png", mimetype="image/png")
+
+
+@app.get("/sw.js")
+def service_worker():
+    # Service worker ساده؛ فعلاً صفحات را cache نمی‌کند و فقط نصب PWA را پشتیبانی می‌کند.
+    js = """
+self.addEventListener('install', event => self.skipWaiting());
+self.addEventListener('activate', event => event.waitUntil(self.clients.claim()));
+"""
+    return Response(js, mimetype="application/javascript",
+                    headers={"Cache-Control": "no-cache"})
 
 
 def connect_db():
     if DATABASE_URL:
         db_url = DATABASE_URL
-
         if db_url.startswith("postgres://"):
-            db_url = db_url.replace(
-                "postgres://",
-                "postgresql://",
-                1
-            )
-
+            db_url = db_url.replace("postgres://", "postgresql://", 1)
         return psycopg.connect(
             db_url,
             row_factory=dict_row,
@@ -258,7 +293,6 @@ def connect_db():
 def db_execute(conn, sql, params=()):
     if DATABASE_URL:
         sql = sql.replace("?", "%s")
-
     return conn.execute(sql, params)
 
 
@@ -285,7 +319,6 @@ def notify_eitaa(message):
         return False, "EITAA_TOKEN یا EITAA_CHAT_ID تنظیم نشده"
 
     url = "https://eitaayar.ir/api/app/sendMessage"
-
     try:
         r = requests.post(
             url,
@@ -296,15 +329,9 @@ def notify_eitaa(message):
             },
             timeout=20
         )
-
         r.raise_for_status()
         result = r.json()
-
-        return (
-            result.get("ok") is True,
-            str(result.get("description", ""))
-        )
-
+        return result.get("ok") is True, str(result.get("description", ""))
     except (requests.RequestException, ValueError) as exc:
         app.logger.exception("Eitaa notification failed")
         return False, str(exc)
@@ -332,16 +359,9 @@ def health():
 @app.post("/order")
 def create_order():
     d = request.get_json(silent=True) or {}
-
     fields = {
         k: str(d.get(k, "")).strip()
-        for k in (
-            "product",
-            "customer_name",
-            "phone",
-            "address",
-            "notes"
-        )
+        for k in ("product", "customer_name", "phone", "address", "notes")
     }
 
     try:
@@ -349,13 +369,7 @@ def create_order():
     except (TypeError, ValueError):
         return jsonify(error="تعداد باید عدد باشد"), 400
 
-    required = (
-        "product",
-        "customer_name",
-        "phone",
-        "address"
-    )
-
+    required = ("product", "customer_name", "phone", "address")
     if any(not fields[k] for k in required):
         return jsonify(error="فیلدهای ضروری را تکمیل کنید"), 400
 
@@ -369,7 +383,6 @@ def create_order():
         "address": 700,
         "notes": 700
     }
-
     if any(len(fields[k]) > limits[k] for k in limits):
         return jsonify(error="یکی از فیلدها بیش از حد طولانی است"), 400
 
@@ -379,20 +392,12 @@ def create_order():
     with connect_db() as c:
         db_execute(
             c,
-            """
-            INSERT INTO orders
+            """INSERT INTO orders
             (id,created_at,product,customer_name,phone,address,quantity,notes)
-            VALUES (?,?,?,?,?,?,?,?)
-            """,
+            VALUES (?,?,?,?,?,?,?,?)""",
             (
-                oid,
-                created,
-                fields["product"],
-                fields["customer_name"],
-                fields["phone"],
-                fields["address"],
-                quantity,
-                fields["notes"]
+                oid, created, fields["product"], fields["customer_name"],
+                fields["phone"], fields["address"], quantity, fields["notes"]
             )
         )
 
@@ -409,55 +414,34 @@ def create_order():
     )
 
     sent, error = notify_eitaa(msg)
-
     with connect_db() as c:
-        db_execute(
-            c,
-            "UPDATE orders SET notified=? WHERE id=?",
-            (int(sent), oid)
-        )
+        db_execute(c, "UPDATE orders SET notified=? WHERE id=?", (int(sent), oid))
 
     if sent:
         return jsonify(
-            ok=True,
-            order_id=oid,
+            ok=True, order_id=oid,
             message=f"سفارش {oid} ثبت و اطلاع‌رسانی شد."
         )
 
-    app.logger.error(
-        "Order %s saved; notification not sent: %s",
-        oid,
-        error
-    )
-
+    app.logger.error("Order %s saved; notification not sent: %s", oid, error)
     return jsonify(
-        ok=True,
-        order_id=oid,
-        message=(
-            f"سفارش {oid} ثبت شد؛ اما اطلاع‌رسانی ایتا انجام نشد "
-            "و مدیر باید تنظیمات را بررسی کند."
-        )
+        ok=True, order_id=oid,
+        message=f"سفارش {oid} ثبت شد؛ اما اطلاع‌رسانی ایتا انجام نشد و مدیر باید تنظیمات را بررسی کند."
     ), 202
 
 
 def is_admin():
-    return (
-        bool(ADMIN_PANEL_KEY)
-        and request.headers.get("X-Admin-Key", "") == ADMIN_PANEL_KEY
-    )
+    return bool(ADMIN_PANEL_KEY) and request.headers.get("X-Admin-Key", "") == ADMIN_PANEL_KEY
 
 
 @app.get("/admin/orders")
 def list_orders():
     if not is_admin():
         return jsonify(error="دسترسی غیرمجاز"), 401
-
     with connect_db() as c:
         rows = db_execute(
-            c,
-            "SELECT * FROM orders ORDER BY created_at DESC LIMIT 100"
+            c, "SELECT * FROM orders ORDER BY created_at DESC LIMIT 100"
         ).fetchall()
-
     return jsonify(orders=[dict(x) for x in rows])
 
 
@@ -467,43 +451,23 @@ def set_status():
         return jsonify(error="دسترسی غیرمجاز"), 401
 
     d = request.get_json(silent=True) or {}
-
     oid = str(d.get("order_id", "")).strip()
     status = str(d.get("status", "")).strip()
-
-    allowed = (
-        "جدید",
-        "در حال آماده‌سازی",
-        "ارسال شد",
-        "تحویل شد",
-        "لغو شد"
-    )
+    allowed = ("جدید", "در حال آماده‌سازی", "ارسال شد", "تحویل شد", "لغو شد")
 
     if not oid or status not in allowed:
         return jsonify(error="شماره سفارش یا وضعیت نامعتبر است"), 400
 
     with connect_db() as c:
-        cur = db_execute(
-            c,
-            "UPDATE orders SET status=? WHERE id=?",
-            (status, oid)
-        )
+        cur = db_execute(c, "UPDATE orders SET status=? WHERE id=?", (status, oid))
 
     if not cur.rowcount:
         return jsonify(error="سفارش پیدا نشد"), 404
 
-    return jsonify(
-        ok=True,
-        order_id=oid,
-        status=status
-    )
+    return jsonify(ok=True, order_id=oid, status=status)
 
 
 init_db()
 
-
 if __name__ == "__main__":
-    app.run(
-        host="0.0.0.0",
-        port=int(os.environ.get("PORT", "10000"))
-)
+    app.run(host="0.0.0.0", port=int(os.environ.get("PORT", "10000")))
