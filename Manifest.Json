@@ -6,13 +6,9 @@
   "orientation": "any",
   "scope": "/",
   "short_name": "کالای آشپزخانه",
-  "start_url": "/",
+  "start_url": "https://kalay-kitchen-luxury.onrender.com/",
   "theme_color": "#ffffff",
-  "description": "فروش آنلاین کالای آشپزخانه لوکس و ثبت سفارش",
   "id": "/",
-  "lang": "fa",
-  "display_override": [
-    "standalone",
-    "window-controls-overlay"
-  ]
+  "description": "مدیریت ثبت و سفارش کالای آشپزخانه لوکس",
+  "lang": "fa"
 }
