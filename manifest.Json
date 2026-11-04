@@ -8,6 +8,11 @@
   "short_name": "کالای آشپزخانه",
   "start_url": "/",
   "theme_color": "#ffffff",
+  "description": "فروش آنلاین کالای آشپزخانه لوکس و ثبت سفارش",
   "id": "/",
-  "description": "فروش آنلاین کالای آشپزخانه لوکس و ثبت سفارش"
+  "lang": "fa",
+  "display_override": [
+    "standalone",
+    "window-controls-overlay"
+  ]
 }
