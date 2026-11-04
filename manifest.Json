@@ -1,14 +1,27 @@
+
 {
-  "background_color": "#ffffff",
-  "dir": "ltr",
-  "display": "standalone",
+  "id": "/",
   "name": "کالای آشپزخانه لوکس",
+  "short_name": "کالای آشپزخانه",
+  "description": "فروش آنلاین کالای آشپزخانه لوکس و ثبت سفارش",
+  "lang": "fa",
+  "dir": "rtl",
+  "display": "standalone",
   "orientation": "any",
   "scope": "/",
-  "short_name": "کالای آشپزخانه",
-  "start_url": "https://kalay-kitchen-luxury.onrender.com/",
+  "start_url": "/",
+  "background_color": "#ffffff",
   "theme_color": "#ffffff",
-  "id": "/",
-  "description": "مدیریت ثبت و سفارش کالای آشپزخانه لوکس",
-  "lang": "fa"
+  "icons": [
+    {
+      "src": "/static/icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png"
+    },
+    {
+      "src": "/static/icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png"
+    }
+  ]
 }
