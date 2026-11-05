@@ -1,16 +1,13 @@
 import os
+import re
 import json
-import html
 import secrets
 import logging
 from datetime import datetime
 from urllib.parse import quote
 
 import requests
-from flask import (
-    Flask, request, redirect, url_for, session,
-    render_template_string, jsonify, make_response
-)
+from flask import Flask, request, redirect, url_for, render_template_string, jsonify, make_response, session
 
 try:
     import psycopg
@@ -19,20 +16,11 @@ except ImportError:
     psycopg = None
     dict_row = None
 
-try:
-    import sqlite3
-except ImportError:
-    sqlite3 = None
+import sqlite3
 
-
-# =========================================================
-# تنظیمات اصلی
-# =========================================================
-
+# ===================== تنظیمات =====================
 app = Flask(__name__)
-
 app.secret_key = os.getenv("FLASK_SECRET_KEY") or secrets.token_hex(32)
-
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("KalayKitchen")
 
@@ -40,890 +28,426 @@ DATABASE_URL = os.getenv("DATABASE_URL", "").strip()
 EITAA_TOKEN = os.getenv("EITAA_TOKEN", "").strip()
 EITAA_CHAT_ID = os.getenv("EITAA_CHAT_ID", "").strip()
 ADMIN_PANEL_KEY = os.getenv("ADMIN_PANEL_KEY", "").strip()
-
 APP_NAME = "کالای آشپزخانه لوکس"
 
-
-# =========================================================
-# دیتابیس
-# =========================================================
-
+# ===================== دیتابیس =====================
 def get_connection():
     if DATABASE_URL:
         if psycopg is None:
-            raise RuntimeError("کتابخانه psycopg نصب نیست")
-
-        db_url = DATABASE_URL.replace(
-            "postgres://", "postgresql://", 1
-        ) if DATABASE_URL.startswith("postgres://") else DATABASE_URL
-
-        return psycopg.connect(
-            db_url,
-            row_factory=dict_row,
-            connect_timeout=15
-        )
-
-    if sqlite3 is None:
-        raise RuntimeError("SQLite در دسترس نیست")
-
-    conn = sqlite3.connect(
-        os.getenv("DATABASE_PATH", "orders.db"),
-        timeout=30
-    )
+            raise RuntimeError("psycopg نصب نیست؛ requirements.txt را بررسی کنید")
+        db_url = DATABASE_URL
+        if db_url.startswith("postgres://"):
+            db_url = db_url.replace("postgres://", "postgresql://", 1)
+        return psycopg.connect(db_url, row_factory=dict_row, connect_timeout=20)
+    conn = sqlite3.connect(os.getenv("DATABASE_PATH", "orders.db"), timeout=30)
     conn.row_factory = sqlite3.Row
     return conn
-
 
 def execute_sql(conn, sql, params=()):
     if DATABASE_URL:
         sql = sql.replace("?", "%s")
     return conn.execute(sql, params)
 
-
 def init_db():
     conn = get_connection()
-
     try:
-        execute_sql(conn, """
-            CREATE TABLE IF NOT EXISTS orders (
-                id SERIAL PRIMARY KEY,
-                customer_name TEXT NOT NULL,
-                phone TEXT NOT NULL,
-                product TEXT NOT NULL,
-                quantity INTEGER NOT NULL,
-                price NUMERIC(14,2) NOT NULL,
-                total NUMERIC(14,2) NOT NULL,
-                address TEXT,
-                description TEXT,
-                status TEXT NOT NULL DEFAULT 'جدید',
-                eitaa_sent INTEGER NOT NULL DEFAULT 0,
-                eitaa_error TEXT,
-                created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
-            )
-        """) if DATABASE_URL else conn.execute("""
-            CREATE TABLE IF NOT EXISTS orders (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                customer_name TEXT NOT NULL,
-                phone TEXT NOT NULL,
-                product TEXT NOT NULL,
-                quantity INTEGER NOT NULL,
-                price REAL NOT NULL,
-                total REAL NOT NULL,
-                address TEXT,
-                description TEXT,
-                status TEXT NOT NULL DEFAULT 'جدید',
-                eitaa_sent INTEGER NOT NULL DEFAULT 0,
-                eitaa_error TEXT,
-                created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
-            )
-        """)
-
+        if DATABASE_URL:
+            execute_sql(conn, """
+                CREATE TABLE IF NOT EXISTS orders (
+                    id BIGSERIAL PRIMARY KEY,
+                    customer_name TEXT NOT NULL,
+                    phone TEXT NOT NULL,
+                    product TEXT NOT NULL,
+                    quantity INTEGER NOT NULL,
+                    price NUMERIC(14,2) NOT NULL,
+                    total NUMERIC(18,2) NOT NULL,
+                    address TEXT DEFAULT '',
+                    description TEXT DEFAULT '',
+                    status TEXT NOT NULL DEFAULT 'جدید',
+                    eitaa_sent INTEGER NOT NULL DEFAULT 0,
+                    eitaa_error TEXT,
+                    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+                )
+            """)
+            # افزودن ستون‌ها به دیتابیس قدیمی، بدون حذف سفارش‌های قبلی
+            for statement in (
+                "ALTER TABLE orders ADD COLUMN IF NOT EXISTS address TEXT DEFAULT ''",
+                "ALTER TABLE orders ADD COLUMN IF NOT EXISTS description TEXT DEFAULT ''",
+                "ALTER TABLE orders ADD COLUMN IF NOT EXISTS status TEXT DEFAULT 'جدید'",
+                "ALTER TABLE orders ADD COLUMN IF NOT EXISTS eitaa_sent INTEGER DEFAULT 0",
+                "ALTER TABLE orders ADD COLUMN IF NOT EXISTS eitaa_error TEXT",
+                "ALTER TABLE orders ADD COLUMN IF NOT EXISTS created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP",
+            ):
+                execute_sql(conn, statement)
+        else:
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS orders (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    customer_name TEXT NOT NULL, phone TEXT NOT NULL,
+                    product TEXT NOT NULL, quantity INTEGER NOT NULL,
+                    price REAL NOT NULL, total REAL NOT NULL,
+                    address TEXT DEFAULT '', description TEXT DEFAULT '',
+                    status TEXT NOT NULL DEFAULT 'جدید',
+                    eitaa_sent INTEGER NOT NULL DEFAULT 0,
+                    eitaa_error TEXT,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                )
+            """)
         conn.commit()
-
+        logger.info("Database initialized")
+    except Exception:
+        conn.rollback()
+        logger.exception("Database initialization error")
+        raise
     finally:
         conn.close()
-
-
-def fetch_order(order_id):
-    conn = get_connection()
-
-    try:
-        row = execute_sql(
-            conn,
-            "SELECT * FROM orders WHERE id = ?",
-            (order_id,)
-        ).fetchone()
-
-        return dict(row) if row else None
-
-    finally:
-        conn.close()
-
 
 def save_order(data):
     conn = get_connection()
-
     try:
-        sql = """
-            INSERT INTO orders (
-                customer_name, phone, product,
-                quantity, price, total,
-                address, description,
-                status, eitaa_sent
-            )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        """
-
-        params = (
-            data["customer_name"],
-            data["phone"],
-            data["product"],
-            data["quantity"],
-            data["price"],
-            data["total"],
-            data["address"],
-            data["description"],
-            "جدید",
-            0
-        )
-
+        sql = """INSERT INTO orders
+        (customer_name, phone, product, quantity, price, total, address, description, status, eitaa_sent)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"""
+        params = (data["customer_name"], data["phone"], data["product"],
+                  data["quantity"], data["price"], data["total"],
+                  data["address"], data["description"], "جدید", 0)
         if DATABASE_URL:
-            row = execute_sql(
-                conn,
-                sql + " RETURNING id",
-                params
-            ).fetchone()
+            row = execute_sql(conn, sql + " RETURNING id", params).fetchone()
             order_id = row["id"]
         else:
-            cursor = execute_sql(conn, sql, params)
-            order_id = cursor.lastrowid
-
-        conn.commit()
+            order_id = execute_sql(conn, sql, params).lastrowid
+        conn.commit()  # ابتدا سفارش قطعی در دیتابیس ذخیره می‌شود
         return order_id
-
+    except Exception:
+        conn.rollback()
+        logger.exception("save_order failed")
+        raise
     finally:
         conn.close()
 
+def fetch_order(order_id):
+    conn = get_connection()
+    try:
+        row = execute_sql(conn, "SELECT * FROM orders WHERE id = ?", (order_id,)).fetchone()
+        return dict(row) if row else None
+    finally:
+        conn.close()
 
 def update_eitaa_result(order_id, sent, error=None):
     conn = get_connection()
-
     try:
-        execute_sql(
-            conn,
-            """
-            UPDATE orders
-            SET eitaa_sent = ?, eitaa_error = ?
-            WHERE id = ?
-            """,
-            (1 if sent else 0, error, order_id)
-        )
+        execute_sql(conn, "UPDATE orders SET eitaa_sent=?, eitaa_error=? WHERE id=?",
+                    (1 if sent else 0, error, order_id))
         conn.commit()
-
+    except Exception:
+        conn.rollback()
+        logger.exception("Could not save Eitaa result")
+        raise
     finally:
         conn.close()
-
 
 def update_order_status(order_id, status):
     conn = get_connection()
-
     try:
-        execute_sql(
-            conn,
-            "UPDATE orders SET status = ? WHERE id = ?",
-            (status, order_id)
-        )
+        execute_sql(conn, "UPDATE orders SET status=? WHERE id=?", (status, order_id))
         conn.commit()
-
     finally:
         conn.close()
-
 
 def get_orders(limit=100):
     conn = get_connection()
-
     try:
-        rows = execute_sql(
-            conn,
-            "SELECT * FROM orders ORDER BY id DESC LIMIT ?",
-            (limit,)
-        ).fetchall()
-
+        rows = execute_sql(conn, "SELECT * FROM orders ORDER BY id DESC LIMIT ?", (limit,)).fetchall()
         return [dict(row) for row in rows]
-
     finally:
         conn.close()
 
-
-# =========================================================
-# ارسال پیام ایتا
-# =========================================================
-
+# ===================== ایتا =====================
 def send_eitaa_message(message):
     if not EITAA_TOKEN:
-        return False, "EITAA_TOKEN تنظیم نشده است"
-
+        return False, "متغیر EITAA_TOKEN در Render خالی است"
     if not EITAA_CHAT_ID:
-        return False, "EITAA_CHAT_ID تنظیم نشده است"
+        return False, "متغیر EITAA_CHAT_ID در Render خالی است"
 
-    api_url = (
-        "https://eitaayar.ir/api/"
-        + quote(EITAA_TOKEN, safe="")
-        + "/sendMessage"
-    )
-
+    api_url = "https://eitaayar.ir/api/" + quote(EITAA_TOKEN, safe="") + "/sendMessage"
     try:
-        response = requests.post(
-            api_url,
-            data={
-                "chat_id": EITAA_CHAT_ID,
-                "text": message
-            },
-            timeout=25
-        )
-
+        response = requests.post(api_url, data={"chat_id": EITAA_CHAT_ID, "text": message}, timeout=30)
         response.raise_for_status()
-
         try:
             result = response.json()
         except ValueError:
-            result = {}
-
-        if result.get("ok") is False:
-            return False, str(result)
-
-        if result.get("error"):
-            return False, str(result["error"])
-
+            return False, "پاسخ ایتایار JSON معتبر نیست: " + response.text[:300]
+        if result.get("ok") is False or result.get("error"):
+            return False, str(result)[:1000]
         return True, None
-
     except requests.RequestException as exc:
-        logger.exception("Eitaa request failed")
-        return False, str(exc)
+        logger.exception("Eitaa API request failed")
+        return False, str(exc)[:1000]
 
+def money(value):
+    try:
+        return f"{float(value):,.0f}"
+    except (ValueError, TypeError):
+        return str(value)
 
 def make_order_message(order):
     return (
-        "🛒 سفارش جدید\n"
+        "🛒 سفارش جدید کالای آشپزخانه لوکس\n"
         "━━━━━━━━━━━━━━\n"
         f"شماره سفارش: {order['id']}\n"
-        f"مشتری: {order['customer_name']}\n"
+        f"نام مشتری: {order['customer_name']}\n"
         f"تلفن: {order['phone']}\n"
         f"محصول: {order['product']}\n"
         f"تعداد: {order['quantity']}\n"
-        f"قیمت واحد: {order['price']:,}\n"
-        f"مبلغ کل: {order['total']:,}\n"
+        f"قیمت واحد: {money(order['price'])} تومان\n"
+        f"مبلغ کل: {money(order['total'])} تومان\n"
         f"آدرس: {order.get('address') or 'ثبت نشده'}\n"
         f"توضیحات: {order.get('description') or 'ندارد'}\n"
-        "━━━━━━━━━━━━━━\n"
-        "کالای آشپزخانه لوکس"
+        "━━━━━━━━━━━━━━"
     )
-
 
 def notify_order(order_id):
-    order = fetch_order(order_id)
+    try:
+        order = fetch_order(order_id)
+        if not order:
+            return False, "سفارش در دیتابیس پیدا نشد"
+        success, error = send_eitaa_message(make_order_message(order))
+        update_eitaa_result(order_id, success, error)
+        if success:
+            logger.info("Eitaa sent for order %s", order_id)
+        else:
+            logger.error("Eitaa failed for order %s: %s", order_id, error)
+        return success, error
+    except Exception as exc:
+        logger.exception("notify_order failed for %s", order_id)
+        return False, str(exc)[:1000]
 
-    if not order:
-        return False, "سفارش پیدا نشد"
+def normalize_digits(value):
+    trans = str.maketrans("۰۱۲۳۴۵۶۷۸۹٠١٢٣٤٥٦٧٨٩", "01234567890123456789")
+    return str(value or "").translate(trans).replace(",", "").replace("٬", "").strip()
 
-    success, error = send_eitaa_message(
-        make_order_message(order)
-    )
+def parse_int(value, default=0):
+    cleaned = normalize_digits(value)
+    if not cleaned:
+        return default
+    if not re.fullmatch(r"-?\\d+", cleaned):
+        raise ValueError("عدد نامعتبر")
+    return int(cleaned)
 
-    update_eitaa_result(order_id, success, error)
-
-    if success:
-        logger.info("Eitaa notification sent for order %s", order_id)
-    else:
-        logger.error(
-            "Eitaa notification failed for order %s: %s",
-            order_id,
-            error
-        )
-
-    return success, error
-
-
-# =========================================================
-# قالب فرم سفارش
-# =========================================================
-
-ORDER_PAGE = """
-<!DOCTYPE html>
-<html lang="fa" dir="rtl">
-<head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<meta name="theme-color" content="#173b35">
-<meta name="description" content="فروش آنلاین کالای آشپزخانه لوکس و ثبت سفارش">
-<link rel="manifest" href="/manifest.json">
-<title>کالای آشپزخانه لوکس</title>
-
+# ===================== فرم سفارش =====================
+ORDER_PAGE = r"""
+<!doctype html><html lang="fa" dir="rtl"><head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="theme-color" content="#173b35"><meta name="description" content="فروش آنلاین کالای آشپزخانه لوکس و ثبت سفارش">
+<link rel="manifest" href="/manifest.json"><title>کالای آشپزخانه لوکس</title>
 <style>
-*{box-sizing:border-box}
-body{
- margin:0;background:#f4f5f1;color:#202820;
- font-family:Tahoma,Arial,sans-serif
-}
-header{
- background:#173b35;color:white;text-align:center;
- padding:25px 15px
-}
-header h1{font-size:23px;margin:0 0 10px}
-header p{margin:0;font-size:14px}
-.container{max-width:600px;margin:25px auto;padding:0 14px}
-.card{
- background:white;border-radius:15px;padding:22px;
- box-shadow:0 4px 18px #0000000b
-}
-label{display:block;margin:15px 0 7px;font-size:14px}
-input,textarea{
- width:100%;padding:13px;border:1px solid #ddd;
- border-radius:9px;font-size:15px;font-family:inherit
-}
-textarea{min-height:90px;resize:vertical}
-.total{
- background:#edf5ef;padding:14px;border-radius:9px;
- margin-top:16px;font-weight:bold;color:#173b35
-}
-button{
- width:100%;border:0;border-radius:10px;padding:15px;
- margin-top:20px;background:#173b35;color:white;
- font-size:16px;font-family:inherit;cursor:pointer
-}
-button:disabled{opacity:.5}
-.notice{
- padding:13px;border-radius:9px;background:#edf5ef;
- margin-bottom:15px
-}
-footer{text-align:center;color:#777;font-size:12px;padding:25px}
-</style>
-</head>
-
-<body>
-<header>
-<h1>کالای آشپزخانه لوکس</h1>
-<p>ثبت سفارش آسان و سریع</p>
-</header>
-
-<div class="container">
-<div class="card">
-
-{% if message %}
-<div class="notice">{{ message }}</div>
-{% endif %}
-
+*{box-sizing:border-box}body{margin:0;background:#f4f5f1;color:#202820;font-family:Tahoma,Arial,sans-serif}
+header{background:#173b35;color:white;text-align:center;padding:25px 15px}header h1{font-size:23px;margin:0 0 10px}
+.container{max-width:600px;margin:25px auto;padding:0 14px}.card{background:white;border-radius:15px;padding:22px;box-shadow:0 4px 18px #0000000b}
+label{display:block;margin:15px 0 7px;font-size:14px}input,textarea{width:100%;padding:13px;border:1px solid #ddd;border-radius:9px;font-size:15px;font-family:inherit}
+textarea{min-height:90px}.total,.notice{background:#edf5ef;padding:14px;border-radius:9px;margin-top:16px;font-weight:bold;color:#173b35}
+button{width:100%;border:0;border-radius:10px;padding:15px;margin-top:20px;background:#173b35;color:white;font-size:16px;font-family:inherit;cursor:pointer}
+footer{text-align:center;color:#777;font-size:12px;padding:25px}.error{background:#fff0f0;color:#a00;padding:12px;border-radius:8px}
+</style></head><body><header><h1>کالای آشپزخانه لوکس</h1><p>ثبت سفارش آسان و سریع</p></header>
+<div class="container"><div class="card">
+{% if message %}<div class="notice">{{ message }}</div>{% endif %}
+{% if error %}<div class="error">{{ error }}</div>{% endif %}
 <form method="POST" action="/order">
-
-<label>نام و نام خانوادگی *</label>
-<input name="customer_name" required maxlength="150">
-
-<label>شماره تلفن *</label>
-<input name="phone" required maxlength="30"
-       inputmode="tel">
-
-<label>نام محصول *</label>
-<input name="product" required maxlength="250">
-
-<label>قیمت واحد (تومان) *</label>
-<input id="price" name="price" type="number"
-       min="0" step="1" required>
-
-<label>تعداد *</label>
-<input id="quantity" name="quantity" type="number"
-       min="1" max="100000" value="1" required>
-
-<div class="total">
-مبلغ کل: <span id="total">0</span> تومان
-</div>
-
-<label>آدرس تحویل</label>
-<textarea name="address" maxlength="2000"></textarea>
-
-<label>توضیحات سفارش</label>
-<textarea name="description" maxlength="2000"></textarea>
-
-<button type="submit">ثبت سفارش</button>
-</form>
-</div>
-</div>
-
-<footer>کالای آشپزخانه لوکس</footer>
-
+<label>نام و نام خانوادگی *</label><input name="customer_name" required maxlength="150" autocomplete="name">
+<label>شماره تلفن *</label><input name="phone" required maxlength="30" inputmode="tel" autocomplete="tel">
+<label>نام محصول *</label><input name="product" required maxlength="250">
+<label>قیمت واحد (تومان) *</label><input id="price" name="price" type="text" inputmode="numeric" placeholder="مثلاً ۲۰۰۰۰۰" required>
+<label>تعداد *</label><input id="quantity" name="quantity" type="number" min="1" max="100000" value="1" required>
+<div class="total">مبلغ کل: <span id="total">۰</span> تومان</div>
+<label>آدرس تحویل</label><textarea name="address" maxlength="2000"></textarea>
+<label>توضیحات سفارش</label><textarea name="description" maxlength="2000"></textarea>
+<button type="submit">ثبت سفارش</button></form></div></div><footer>کالای آشپزخانه لوکس</footer>
 <script>
-const price=document.getElementById("price");
-const quantity=document.getElementById("quantity");
-const total=document.getElementById("total");
-
-function calc(){
- const p=Number(price.value||0);
- const q=Number(quantity.value||0);
- total.textContent=(p*q).toLocaleString("fa-IR");
-}
-price.addEventListener("input",calc);
-quantity.addEventListener("input",calc);
-</script>
-</body>
-</html>
+const p=document.getElementById('price'),q=document.getElementById('quantity'),t=document.getElementById('total');
+function digits(x){return String(x).replace(/[۰-۹]/g,d=>'۰۱۲۳۴۵۶۷۸۹'.indexOf(d)).replace(/[٠-٩]/g,d=>'٠١٢٣٤٥٦٧٨٩'.indexOf(d));}
+function calc(){let a=parseInt(digits(p.value).replace(/[٬,\\s]/g,''))||0,b=parseInt(q.value)||0;t.textContent=(a*b).toLocaleString('fa-IR');}
+p.addEventListener('input',calc);q.addEventListener('input',calc);
+</script></body></html>
 """
 
-
-# =========================================================
-# صفحه اصلی
-# =========================================================
-
-@app.route("/", methods=["GET"])
+@app.get("/")
 def index():
-    return render_template_string(
-        ORDER_PAGE,
-        message=request.args.get("message", "")
-    )
+    return render_template_string(ORDER_PAGE, message=request.args.get("message", ""), error=request.args.get("error", ""))
 
-
-# =========================================================
-# ثبت سفارش
-# =========================================================
-
-@app.route("/order", methods=["POST"])
+@app.post("/order")
 def create_order():
     try:
-        customer_name = request.form.get(
-            "customer_name", ""
-        ).strip()
-
+        customer_name = request.form.get("customer_name", "").strip()
         phone = request.form.get("phone", "").strip()
         product = request.form.get("product", "").strip()
-
         address = request.form.get("address", "").strip()
-        description = request.form.get(
-            "description", ""
-        ).strip()
-
-        price = int(request.form.get("price", "0"))
-        quantity = int(request.form.get("quantity", "0"))
+        description = request.form.get("description", "").strip()
+        price = parse_int(request.form.get("price"))
+        quantity = parse_int(request.form.get("quantity"), 1)
 
         if not customer_name or not phone or not product:
-            return "اطلاعات ضروری وارد نشده است", 400
-
+            return redirect(url_for("index", error="لطفاً نام، تلفن و محصول را کامل وارد کنید."))
         if price < 0 or quantity < 1 or quantity > 100000:
-            return "قیمت یا تعداد نامعتبر است", 400
+            return redirect(url_for("index", error="قیمت یا تعداد واردشده معتبر نیست."))
+        if len(phone) < 7:
+            return redirect(url_for("index", error="شماره تلفن را صحیح وارد کنید."))
 
-        total = price * quantity
-
-        data = {
-            "customer_name": customer_name,
-            "phone": phone,
-            "product": product,
-            "quantity": quantity,
-            "price": price,
-            "total": total,
-            "address": address,
-            "description": description
-        }
-
-        order_id = save_order(data)
-
-        success, error = notify_order(order_id)
-
-        if success:
-            message = (
-                f"سفارش شماره {order_id} ثبت و به ایتا ارسال شد."
-            )
+        order_id = save_order({
+            "customer_name": customer_name, "phone": phone, "product": product,
+            "quantity": quantity, "price": price, "total": price * quantity,
+            "address": address, "description": description
+        })
+        sent, eitaa_error = notify_order(order_id)
+        if sent:
+            msg = f"سفارش شماره {order_id} با موفقیت ثبت و به ایتا ارسال شد."
         else:
-            message = (
-                f"سفارش شماره {order_id} ثبت شد؛ "
-                "اما اطلاع‌رسانی ایتا انجام نشد. "
-                "مدیر باید تنظیمات را بررسی کند."
-            )
-
-        logger.info(
-            "Order %s created. Eitaa success=%s",
-            order_id,
-            success
-        )
-
-        return redirect(
-            url_for("index", message=message)
-        )
-
+            msg = f"سفارش شماره {order_id} در دیتابیس ثبت شد؛ ارسال ایتا ناموفق بود. خطا: {eitaa_error}"
+        logger.info("Order %s created; eitaa=%s", order_id, sent)
+        return redirect(url_for("index", message=msg))
     except ValueError:
-        return "قیمت و تعداد باید عدد باشند", 400
-
+        return redirect(url_for("index", error="قیمت و تعداد باید عدد باشند."))
     except Exception:
-        logger.exception("Order creation failed")
-        return "خطا در ثبت سفارش. لطفاً دوباره تلاش کنید.", 500
+        logger.exception("Order form submission failed")
+        return redirect(url_for("index", error="خطا در ذخیره سفارش در دیتابیس. مسیر /health را بررسی کنید."))
 
-
-# =========================================================
-# API ثبت سفارش
-# =========================================================
-
-@app.route("/api/order", methods=["POST"])
+@app.post("/api/order")
 def api_create_order():
     try:
         data = request.get_json(silent=True) or {}
-
-        customer_name = str(
-            data.get("customer_name", "")
-        ).strip()
-
+        price = parse_int(data.get("price"))
+        quantity = parse_int(data.get("quantity"))
+        customer_name = str(data.get("customer_name", "")).strip()
         phone = str(data.get("phone", "")).strip()
         product = str(data.get("product", "")).strip()
-
-        price = int(data.get("price", 0))
-        quantity = int(data.get("quantity", 0))
-
-        address = str(data.get("address", "")).strip()
-        description = str(
-            data.get("description", "")
-        ).strip()
-
-        if not customer_name or not phone or not product:
-            return jsonify(
-                ok=False,
-                error="اطلاعات ضروری وارد نشده است"
-            ), 400
-
-        if price < 0 or quantity < 1 or quantity > 100000:
-            return jsonify(
-                ok=False,
-                error="قیمت یا تعداد نامعتبر است"
-            ), 400
-
-        order_id = save_order({
-            "customer_name": customer_name,
-            "phone": phone,
-            "product": product,
-            "quantity": quantity,
-            "price": price,
-            "total": price * quantity,
-            "address": address,
-            "description": description
-        })
-
-        success, error = notify_order(order_id)
-
-        return jsonify({
-            "ok": True,
-            "order_id": order_id,
-            "eitaa_sent": success,
-            "eitaa_error": error
-        }), 201
-
+        if not customer_name or not phone or not product or price < 0 or quantity < 1 or quantity > 100000:
+            return jsonify(ok=False, error="اطلاعات یا قیمت/تعداد نامعتبر است"), 400
+        order_id = save_order({"customer_name":customer_name,"phone":phone,"product":product,
+            "quantity":quantity,"price":price,"total":price*quantity,
+            "address":str(data.get("address","")).strip(),
+            "description":str(data.get("description","")).strip()})
+        sent, error = notify_order(order_id)
+        return jsonify(ok=True, order_id=order_id, eitaa_sent=sent, eitaa_error=error), 201
     except (ValueError, TypeError):
-        return jsonify(
-            ok=False,
-            error="قیمت و تعداد باید عدد باشند"
-        ), 400
-
+        return jsonify(ok=False, error="قیمت و تعداد باید عدد باشند"), 400
     except Exception:
-        logger.exception("API order failed")
-        return jsonify(ok=False, error="خطای سرور"), 500
+        logger.exception("API order error")
+        return jsonify(ok=False, error="خطا در ثبت سفارش"), 500
 
+# ===================== پنل مدیریت =====================
+ADMIN_LOGIN = """<!doctype html><html lang="fa" dir="rtl"><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1"><title>ورود مدیر</title>
+<style>body{font-family:Tahoma;background:#f3f4f2;padding:20px}.card{max-width:420px;margin:60px auto;background:white;padding:25px;border-radius:12px}
+input,button{width:100%;padding:14px;margin-top:15px;font-size:16px;border-radius:8px}input{border:1px solid #ddd}button{background:#173b35;color:white;border:0}</style>
+<div class="card"><h2>ورود به پنل مدیریت</h2>{% if error %}<p style="color:red">{{error}}</p>{% endif %}
+<form method="post"><input name="key" type="password" placeholder="رمز مدیریت" required><button>ورود</button></form></div></html>"""
 
-# =========================================================
-# احراز هویت پنل مدیریت
-# =========================================================
+ADMIN_PAGE = """<!doctype html><html lang="fa" dir="rtl"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1"><title>مدیریت سفارش‌ها</title>
+<style>body{font-family:Tahoma;background:#f3f4f2;margin:0}header{background:#173b35;color:white;padding:20px}
+.container{padding:12px;max-width:900px;margin:auto}.card{background:white;padding:15px;border-radius:12px;margin:12px 0;overflow-wrap:anywhere}
+button,select{padding:10px;border-radius:7px}button{background:#173b35;color:white;border:0}.bad{color:#b42318}.good{color:#18733a}a{color:white}</style></head><body>
+<header><h2>پنل مدیریت کالای آشپزخانه لوکس</h2><a href="/admin/logout">خروج</a></header><div class="container">
+<div class="card"><h3>تعداد سفارش‌ها: {{orders|length}}</h3></div>
+{% for o in orders %}<div class="card"><h3>سفارش شماره {{o.id}}</h3>
+<p>مشتری: {{o.customer_name}} | تلفن: {{o.phone}}</p><p>محصول: {{o.product}} | تعداد: {{o.quantity}}</p>
+<p>قیمت واحد: {{o.price}} تومان</p><p><b>مبلغ کل: {{o.total}} تومان</b></p>
+<p>آدرس: {{o.address or 'ثبت نشده'}}</p><p>توضیحات: {{o.description or 'ندارد'}}</p><p>زمان: {{o.created_at}}</p>
+<p>وضعیت: <b>{{o.status}}</b></p>{% if o.eitaa_sent %}<p class="good">پیام ایتا ارسال شده</p>{% else %}<p class="bad">پیام ایتا ارسال نشده</p>{% endif %}
+{% if o.eitaa_error %}<p class="bad">خطای ایتا: {{o.eitaa_error}}</p>{% endif %}
+<form method="post" action="/admin/status/{{o.id}}"><select name="status">{% for s in statuses %}<option value="{{s}}" {% if s==o.status %}selected{% endif %}>{{s}}</option>{% endfor %}</select><button>ذخیره وضعیت</button></form>
+{% if not o.eitaa_sent %}<form method="post" action="/admin/retry/{{o.id}}"><button style="margin-top:10px">ارسال مجدد به ایتا</button></form>{% endif %}</div>
+{% else %}<div class="card">هنوز سفارشی ثبت نشده است.</div>{% endfor %}</div></body></html>"""
 
-ADMIN_LOGIN_PAGE = """
-<!DOCTYPE html>
-<html lang="fa" dir="rtl">
-<head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width,initial-scale=1">
-<title>ورود مدیر</title>
-<style>
-body{font-family:Tahoma;background:#f3f4f2;padding:20px}
-.card{max-width:420px;margin:60px auto;background:white;
-padding:25px;border-radius:12px}
-input,button{width:100%;padding:14px;margin-top:15px;
-font-size:16px;border-radius:8px}
-input{border:1px solid #ddd}
-button{background:#173b35;color:white;border:0}
-</style>
-</head>
-<body>
-<div class="card">
-<h2>ورود به پنل مدیریت</h2>
-{% if error %}<p style="color:red">{{ error }}</p>{% endif %}
-<form method="POST">
-<input name="key" type="password" placeholder="رمز مدیریت" required>
-<button>ورود</button>
-</form>
-</div>
-</body>
-</html>
-"""
-
+def admin_required():
+    return bool(ADMIN_PANEL_KEY) and session.get("admin_logged_in") is True
 
 @app.route("/admin/login", methods=["GET", "POST"])
 def admin_login():
     if not ADMIN_PANEL_KEY:
-        return "ADMIN_PANEL_KEY در Render تنظیم نشده است", 503
-
+        return "ADMIN_PANEL_KEY در Environment Render تنظیم نشده است", 503
     error = ""
-
     if request.method == "POST":
-        supplied = request.form.get("key", "")
-
-        if secrets.compare_digest(
-            supplied, ADMIN_PANEL_KEY
-        ):
+        if secrets.compare_digest(request.form.get("key", ""), ADMIN_PANEL_KEY):
             session["admin_logged_in"] = True
             return redirect(url_for("admin_panel"))
+        error = "رمز واردشده صحیح نیست"
+    return render_template_string(ADMIN_LOGIN, error=error)
 
-        error = "رمز وارد شده صحیح نیست"
-
-    return render_template_string(
-        ADMIN_LOGIN_PAGE,
-        error=error
-    )
-
-
-def admin_required():
-    return (
-        bool(ADMIN_PANEL_KEY)
-        and session.get("admin_logged_in") is True
-    )
-
-
-# =========================================================
-# پنل مدیریت سفارش
-# =========================================================
-
-ADMIN_PAGE = """
-<!DOCTYPE html>
-<html lang="fa" dir="rtl">
-<head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width,initial-scale=1">
-<title>مدیریت سفارش‌ها</title>
-<style>
-body{font-family:Tahoma;background:#f3f4f2;margin:0}
-header{background:#173b35;color:white;padding:20px}
-.container{padding:12px;max-width:1100px;margin:auto}
-.card{background:white;padding:15px;border-radius:12px;
-margin:12px 0;overflow-wrap:anywhere}
-table{width:100%;border-collapse:collapse}
-td,th{padding:9px;border-bottom:1px solid #eee;
-text-align:right;font-size:13px}
-select,button{padding:10px;border-radius:7px}
-button{background:#173b35;color:white;border:0}
-.bad{color:#b42318}
-.good{color:#18733a}
-a{color:white}
-</style>
-</head>
-<body>
-<header>
-<h2>پنل مدیریت کالای آشپزخانه لوکس</h2>
-<a href="/admin/logout">خروج از پنل</a>
-</header>
-
-<div class="container">
-
-<div class="card">
-<h3>تعداد سفارش‌ها: {{ orders|length }}</h3>
-<p>سفارش‌های جدید در ابتدای فهرست قرار دارند.</p>
-</div>
-
-{% for o in orders %}
-<div class="card">
-<h3>سفارش شماره {{ o.id }}</h3>
-<p>مشتری: {{ o.customer_name }}</p>
-<p>تلفن: {{ o.phone }}</p>
-<p>محصول: {{ o.product }}</p>
-<p>تعداد: {{ o.quantity }}</p>
-<p>قیمت واحد: {{ o.price }}</p>
-<p><b>مبلغ کل: {{ o.total }}</b></p>
-<p>آدرس: {{ o.address or 'ثبت نشده' }}</p>
-<p>توضیحات: {{ o.description or 'ندارد' }}</p>
-<p>تاریخ: {{ o.created_at }}</p>
-
-<p>وضعیت:
-<b>{{ o.status }}</b>
-</p>
-
-<p>
-{% if o.eitaa_sent %}
-<span class="good">پیام ایتا ارسال شده</span>
-{% else %}
-<span class="bad">پیام ایتا ارسال نشده</span>
-{% endif %}
-</p>
-
-{% if o.eitaa_error %}
-<p class="bad">خطای ایتا: {{ o.eitaa_error }}</p>
-{% endif %}
-
-<form method="POST" action="/admin/status/{{ o.id }}">
-<select name="status">
-{% for s in statuses %}
-<option value="{{ s }}" {% if s==o.status %}selected{% endif %}>
-{{ s }}
-</option>
-{% endfor %}
-</select>
-<button>ذخیره وضعیت</button>
-</form>
-
-{% if not o.eitaa_sent %}
-<form method="POST" action="/admin/retry/{{ o.id }}">
-<button style="margin-top:10px">ارسال مجدد به ایتا</button>
-</form>
-{% endif %}
-</div>
-{% else %}
-<div class="card">هنوز سفارشی ثبت نشده است.</div>
-{% endfor %}
-
-</div>
-</body>
-</html>
-"""
-
-
-@app.route("/admin", methods=["GET"])
+@app.get("/admin")
 def admin_panel():
     if not admin_required():
         return redirect(url_for("admin_login"))
+    statuses = ["جدید", "در حال بررسی", "تأیید شده", "در حال ارسال", "تحویل شده", "لغو شده"]
+    return render_template_string(ADMIN_PAGE, orders=get_orders(100), statuses=statuses)
 
-    statuses = [
-        "جدید",
-        "در حال بررسی",
-        "تأیید شده",
-        "در حال ارسال",
-        "تحویل شده",
-        "لغو شده"
-    ]
-
-    return render_template_string(
-        ADMIN_PAGE,
-        orders=get_orders(100),
-        statuses=statuses
-    )
-
-
-@app.route("/admin/status/<int:order_id>", methods=["POST"])
+@app.post("/admin/status/<int:order_id>")
 def admin_update_status(order_id):
     if not admin_required():
         return redirect(url_for("admin_login"))
-
     status = request.form.get("status", "").strip()
-
-    allowed = {
-        "جدید",
-        "در حال بررسی",
-        "تأیید شده",
-        "در حال ارسال",
-        "تحویل شده",
-        "لغو شده"
-    }
-
+    allowed = {"جدید", "در حال بررسی", "تأیید شده", "در حال ارسال", "تحویل شده", "لغو شده"}
     if status in allowed:
         update_order_status(order_id, status)
-
     return redirect(url_for("admin_panel"))
 
-
-@app.route("/admin/retry/<int:order_id>", methods=["POST"])
+@app.post("/admin/retry/<int:order_id>")
 def admin_retry_eitaa(order_id):
     if not admin_required():
         return redirect(url_for("admin_login"))
-
     notify_order(order_id)
     return redirect(url_for("admin_panel"))
 
-
-@app.route("/admin/logout")
+@app.get("/admin/logout")
 def admin_logout():
     session.clear()
     return redirect(url_for("admin_login"))
 
-
-# =========================================================
-# سلامت سرویس و دیتابیس
-# =========================================================
-
-@app.route("/health", methods=["GET"])
+# ===================== سلامت، Manifest و خطا =====================
+@app.get("/health")
 def health():
     try:
         conn = get_connection()
-
         try:
             execute_sql(conn, "SELECT 1").fetchone()
         finally:
             conn.close()
-
-        return jsonify({
-            "ok": True,
-            "service": "Kalay Kitchen Luxury",
-            "database": "postgresql" if DATABASE_URL else "sqlite",
-            "time": datetime.utcnow().isoformat()
-        })
-
+        return jsonify(ok=True, service="Kalay Kitchen Luxury",
+                       database="postgresql" if DATABASE_URL else "sqlite",
+                       time=datetime.utcnow().isoformat())
     except Exception as exc:
         logger.exception("Health check failed")
+        return jsonify(ok=False, database="error", error=str(exc)), 500
 
-        return jsonify({
-            "ok": False,
-            "database": "error",
-            "error": str(exc)
-        }), 500
-
-
-# =========================================================
-# Manifest برنامه
-# =========================================================
-
-@app.route("/manifest.json")
+@app.get("/manifest.json")
 def manifest():
     response = make_response(jsonify({
-        "id": "/",
-        "name": APP_NAME,
-        "short_name": "کالای آشپزخانه",
+        "id": "/", "name": APP_NAME, "short_name": "کالای آشپزخانه",
         "description": "فروش آنلاین کالای آشپزخانه لوکس و ثبت سفارش",
-        "lang": "fa",
-        "dir": "rtl",
-        "display": "standalone",
-        "orientation": "any",
-        "scope": "/",
-        "start_url": "/",
-        "background_color": "#ffffff",
-        "theme_color": "#173b35",
+        "lang": "fa", "dir": "rtl", "display": "standalone",
+        "orientation": "any", "scope": "/", "start_url": "/",
+        "background_color": "#ffffff", "theme_color": "#173b35",
         "icons": [
-            {
-                "src": "/static/icon-192.png",
-                "sizes": "192x192",
-                "type": "image/png"
-            },
-            {
-                "src": "/static/icon-512.png",
-                "sizes": "512x512",
-                "type": "image/png"
-            }
+            {"src": "/static/icon-192.png", "sizes": "192x192", "type": "image/png"},
+            {"src": "/static/icon-512.png", "sizes": "512x512", "type": "image/png"}
         ]
     }))
-
     response.headers["Content-Type"] = "application/manifest+json"
     return response
 
-
-# =========================================================
-# خطاهای عمومی
-# =========================================================
-
 @app.errorhandler(404)
-def not_found(error):
-    return jsonify({
-        "ok": False,
-        "error": "مسیر مورد نظر پیدا نشد"
-    }), 404
-
+def not_found(_error):
+    return jsonify(ok=False, error="مسیر مورد نظر پیدا نشد"), 404
 
 @app.errorhandler(500)
-def internal_error(error):
+def internal_error(_error):
     logger.exception("Internal server error")
-    return jsonify({
-        "ok": False,
-        "error": "خطای داخلی سرور"
-    }), 500
+    return jsonify(ok=False, error="خطای داخلی سرور"), 500
 
-
-# =========================================================
-# شروع برنامه
-# =========================================================
-
+# اجرای راه‌اندازی دیتابیس در شروع سرویس
 try:
     init_db()
-    logger.info("Database initialized successfully")
 except Exception:
-    logger.exception("Database initialization failed")
-
+    logger.exception("Database initialization failed; service started but DB is unavailable")
 
 if __name__ == "__main__":
-    app.run(
-        host="0.0.0.0",
-        port=int(os.getenv("PORT", "5000")),
-        debug=False
-    )
+    app.run(host="0.0.0.0", port=int(os.getenv("PORT", "5000")), debug=False)
