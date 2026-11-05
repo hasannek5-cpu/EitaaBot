@@ -230,7 +230,7 @@ def parse_int(value, default=0):
     cleaned = normalize_digits(value)
     if not cleaned:
         return default
-    if not re.fullmatch(r"-?\\d+", cleaned):
+    if not re.fullmatch(r"-?\d+", cleaned):
         raise ValueError("عدد نامعتبر")
     return int(cleaned)
 
