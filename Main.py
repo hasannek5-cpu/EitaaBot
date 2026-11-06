@@ -391,17 +391,31 @@ def make_order_message(order):
     )
 
 
+
 def send_eitaa_message(message):
+    """
+    ارسال پیام سفارش به کانال ایتا از طریق Eitaayar
+    دریافت متغیرها مستقیماً از Environment رندر
+    """
 
-    if not EITAA_TOKEN:
-        return False, "EITAA_TOKEN تنظیم نشده است"
+    # خواندن مستقیم متغیرهای Render
+    token = (os.getenv("EITAA_TOKEN") or "").strip()
+    chat_id = (os.getenv("EITAA_CHAT_ID") or "").strip()
 
-    if not EITAA_CHAT_ID:
-        return False, "EITAA_CHAT_ID تنظیم نشده است"
+    # بررسی توکن
+    if not token:
+        logger.error("EITAA_TOKEN missing at runtime")
+        return False, "EITAA_TOKEN در Render خالی است"
 
+    # بررسی شناسه کانال
+    if not chat_id:
+        logger.error("EITAA_CHAT_ID missing at runtime")
+        return False, "EITAA_CHAT_ID در Render خالی است"
+
+    # آدرس API ایتایار
     api_url = (
         "https://eitaayar.ir/api/"
-        + quote(EITAA_TOKEN, safe="")
+        + quote(token, safe="")
         + "/sendMessage"
     )
 
@@ -409,50 +423,30 @@ def send_eitaa_message(message):
         response = requests.post(
             api_url,
             data={
-                "chat_id": EITAA_CHAT_ID,
+                "chat_id": chat_id,
                 "text": message
             },
             timeout=30
         )
 
+        # بررسی پاسخ HTTP
         response.raise_for_status()
 
+        # دریافت پاسخ ایتایار
         result = response.json()
 
+        # بررسی خطای API
         if result.get("ok") is False or result.get("error"):
+            logger.error("Eitaa API error: %s", result)
             return False, str(result)[:1000]
 
+        logger.info("Eitaa message sent successfully")
         return True, None
 
     except Exception as exc:
         logger.exception("Eitaa sending failed")
         return False, str(exc)[:1000]
 
-
-def notify_order(order_id):
-
-    try:
-        order = fetch_order(order_id)
-
-        if not order:
-            return False, "سفارش پیدا نشد"
-
-        success, error = send_eitaa_message(
-            make_order_message(order)
-        )
-
-        update_eitaa_result(order_id, success, error)
-
-        if success:
-            logger.info("Eitaa message sent: %s", order_id)
-        else:
-            logger.error("Eitaa error: %s", error)
-
-        return success, error
-
-    except Exception as exc:
-        logger.exception("Notification failed")
-        return False, str(exc)[:1000]
 
 
 # ==================================================
