@@ -432,6 +432,7 @@ def create_order():
 
 total_amount = price * quantity
 
+total_amount = price * quantity
 message = (
     f"سفارش شماره {order_id} ثبت و به ایتا ارسال شد. "
     f"مبلغ کل: {money(total_amount)} تومان"
