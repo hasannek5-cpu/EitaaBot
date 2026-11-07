@@ -436,7 +436,11 @@ def send_eitaa_message(message):
         result = response.json()
 
         # بررسی خطای API
-        if result.get("ok") is False or result.get("error"):
+       
+if result.get("ok") is not True:
+    logger.error("Eitaa API rejected message: %s", result)
+    return False, str(result)[:1000] 
+   
             logger.error("Eitaa API error: %s", result)
             return False, str(result)[:1000]
 
