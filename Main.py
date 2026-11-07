@@ -29,13 +29,16 @@ app.secret_key = os.getenv("FLASK_SECRET_KEY") or secrets.token_hex(32)
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("KalayKitchen")
 
-DATABASE_URL = os.getenv("DATABASE_URL", "").strip()
 APP_NAME = "کالای آشپزخانه لوکس"
 
 
 # ==================================================
 # اتصال دیتابیس
 # ==================================================
+def using_postgres():
+    return bool(os.getenv("DATABASE_URL", "").strip())
+
+
 def get_connection():
     database_url = os.getenv("DATABASE_URL", "").strip()
 
@@ -52,14 +55,16 @@ def get_connection():
             connect_timeout=20
         )
 
-    return sqlite3.connect(
+    conn = sqlite3.connect(
         os.getenv("DATABASE_PATH", "orders.db"),
         timeout=30
     )
+    conn.row_factory = sqlite3.Row
+    return conn
 
 
 def execute_sql(conn, sql, params=()):
-    if os.getenv("DATABASE_URL", "").strip():
+    if using_postgres():
         sql = sql.replace("?", "%s")
     return conn.execute(sql, params)
 
@@ -70,11 +75,11 @@ def execute_sql(conn, sql, params=()):
 def init_db():
     conn = get_connection()
     try:
-        if os.getenv("DATABASE_URL", "").strip():
+        if using_postgres():
             execute_sql(conn, """
                 CREATE TABLE IF NOT EXISTS orders (
                     id TEXT PRIMARY KEY,
-                    created_at TEXT NOT NULL,
+                    created_at TEXT NOT NULL DEFAULT '',
                     product TEXT NOT NULL DEFAULT '',
                     customer_name TEXT NOT NULL DEFAULT '',
                     phone TEXT NOT NULL DEFAULT '',
@@ -122,6 +127,7 @@ def init_db():
                     SET description = COALESCE(NULLIF(description, ''), notes, '')
                     WHERE description IS NULL OR description = ''
                 """)
+
             if "notified" in columns and "eitaa_sent" in columns:
                 execute_sql(conn, """
                     UPDATE orders SET eitaa_sent = notified
@@ -129,11 +135,10 @@ def init_db():
                     AND (eitaa_sent IS NULL OR eitaa_sent = 0)
                 """)
         else:
-            conn.row_factory = sqlite3.Row
             conn.execute("""
                 CREATE TABLE IF NOT EXISTS orders (
                     id TEXT PRIMARY KEY,
-                    created_at TEXT NOT NULL,
+                    created_at TEXT NOT NULL DEFAULT '',
                     product TEXT NOT NULL DEFAULT '',
                     customer_name TEXT NOT NULL DEFAULT '',
                     phone TEXT NOT NULL DEFAULT '',
@@ -150,6 +155,41 @@ def init_db():
                 )
             """)
 
+            # تکمیل ستون‌های دیتابیس SQLite قدیمی، بدون حذف اطلاعات
+            existing = {
+                row["name"] for row in conn.execute("PRAGMA table_info(orders)").fetchall()
+            }
+            sqlite_migrations = {
+                "created_at": "TEXT DEFAULT ''",
+                "product": "TEXT DEFAULT ''",
+                "customer_name": "TEXT DEFAULT ''",
+                "phone": "TEXT DEFAULT ''",
+                "address": "TEXT DEFAULT ''",
+                "quantity": "INTEGER DEFAULT 1",
+                "notes": "TEXT DEFAULT ''",
+                "status": "TEXT DEFAULT 'جدید'",
+                "notified": "INTEGER DEFAULT 0",
+                "description": "TEXT",
+                "eitaa_sent": "INTEGER DEFAULT 0",
+                "eitaa_error": "TEXT",
+                "price": "NUMERIC DEFAULT 0",
+                "total": "NUMERIC DEFAULT 0",
+            }
+            for column, definition in sqlite_migrations.items():
+                if column not in existing:
+                    conn.execute(f"ALTER TABLE orders ADD COLUMN {column} {definition}")
+
+            conn.execute("""
+                UPDATE orders
+                SET description = COALESCE(NULLIF(description, ''), notes, '')
+                WHERE description IS NULL OR description = ''
+            """)
+            conn.execute("""
+                UPDATE orders SET eitaa_sent = notified
+                WHERE notified IS NOT NULL
+                AND (eitaa_sent IS NULL OR eitaa_sent = 0)
+            """)
+
         conn.commit()
         logger.info("Database initialized successfully")
     except Exception:
@@ -161,7 +201,7 @@ def init_db():
 
 
 # ==================================================
-# ثبت سفارش
+# ثبت سفارش و خواندن سفارش‌ها
 # ==================================================
 def save_order(data):
     conn = get_connection()
@@ -176,11 +216,12 @@ def save_order(data):
                 eitaa_sent, eitaa_error, price, total
             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """
+        description = data.get("description", "")
         params = (
             order_id, created_at, data["product"], data["customer_name"],
             data["phone"], data.get("address", ""), data["quantity"],
-            data.get("description", ""), "جدید", 0,
-            data.get("description", ""), 0, None, data["price"], data["total"]
+            description, "جدید", 0, description, 0, None,
+            data["price"], data["total"]
         )
         execute_sql(conn, sql, params)
         conn.commit()
@@ -197,7 +238,9 @@ def save_order(data):
 def fetch_order(order_id):
     conn = get_connection()
     try:
-        row = execute_sql(conn, "SELECT * FROM orders WHERE id = ?", (order_id,)).fetchone()
+        row = execute_sql(
+            conn, "SELECT * FROM orders WHERE id = ?", (order_id,)
+        ).fetchone()
         return dict(row) if row else None
     finally:
         conn.close()
@@ -252,7 +295,7 @@ def make_order_message(order):
         f"قیمت واحد: {money(order.get('price'))} تومان\n"
         f"مبلغ کل: {money(order.get('total'))} تومان\n"
         f"آدرس: {order.get('address') or 'ثبت نشده'}\n"
-        f"توضیحات: {order.get('description') or 'ندارد'}\n"
+        f"توضیحات: {order.get('description') or order.get('notes') or 'ندارد'}\n"
         "━━━━━━━━━━━━━━"
     )
 
@@ -285,8 +328,7 @@ def send_eitaa_message(message):
             logger.error("Eitaa returned non-JSON response: %s", response.text[:500])
             return False, "پاسخ ایتایار JSON معتبر نیست"
 
-        # پاسخ موفق ایتایار معمولاً {"ok": true, ...} است.
-        if result.get("ok") is not True:
+        if not isinstance(result, dict) or result.get("ok") is not True:
             logger.error("Eitaa API rejected message: %s", result)
             return False, str(result)[:1000]
 
@@ -322,7 +364,10 @@ def normalize_digits(value):
         "۰۱۲۳۴۵۶۷۸۹٠١٢٣٤٥٦٧٨٩",
         "01234567890123456789"
     )
-    return str(value or "").translate(trans).replace(",", "").replace("٬", "").strip()
+    return (
+        str(value or "").translate(trans)
+        .replace(",", "").replace("٬", "").strip()
+    )
 
 
 def parse_int(value, default=0):
@@ -385,9 +430,18 @@ style="display:inline-block;margin-top:15px;padding:12px 20px;border-radius:12px
 📷 مشاهده پیج اینستاگرام ما</a></footer>
 <script>
 const p=document.getElementById('price'),q=document.getElementById('quantity'),t=document.getElementById('total');
-function digits(x){return String(x).replace(/[۰-۹]/g,d=>'۰۱۲۳۴۵۶۷۸۹'.indexOf(d)).replace(/[٠-٩]/g,d=>'٠١٢٣٤٥٦٧٨٩'.indexOf(d));}
-function calc(){let a=parseInt(digits(p.value).replace(/[٬,\\s]/g,''))||0;let b=parseInt(q.value)||0;t.textContent=(a*b).toLocaleString('fa-IR');}
-p.addEventListener('input',calc);q.addEventListener('input',calc);
+function digits(x){
+  return String(x)
+    .replace(/[۰-۹]/g,d=>'۰۱۲۳۴۵۶۷۸۹'.indexOf(d))
+    .replace(/[٠-٩]/g,d=>'٠١٢٣٤٥٦٧٨٩'.indexOf(d));
+}
+function calc(){
+  let a=parseInt(digits(p.value).replace(/[٬,\\s]/g,''))||0;
+  let b=parseInt(q.value)||0;
+  t.textContent=(a*b).toLocaleString('fa-IR');
+}
+p.addEventListener('input',calc);
+q.addEventListener('input',calc);
 </script>
 </body></html>
 """
@@ -423,25 +477,35 @@ def create_order():
         if price < 0 or quantity < 1 or quantity > 100000:
             return redirect(url_for("index", error="قیمت یا تعداد نامعتبر است"))
 
+        total_amount = price * quantity
+
         order_id = save_order({
-            "customer_name": customer_name, "phone": phone, "product": product,
-            "quantity": quantity, "price": price, "total": price * quantity,
-            "address": address, "description": description
+            "customer_name": customer_name,
+            "phone": phone,
+            "product": product,
+            "quantity": quantity,
+            "price": price,
+            "total": total_amount,
+            "address": address,
+            "description": description
         })
+
         sent, error = notify_order(order_id)
 
-total_amount = price * quantity
+        if sent:
+            message = (
+                f"سفارش شماره {order_id} ثبت و به ایتا ارسال شد. "
+                f"مبلغ کل: {money(total_amount)} تومان"
+            )
+        else:
+            message = (
+                f"سفارش شماره {order_id} در دیتابیس ثبت شد؛ "
+                f"مبلغ کل: {money(total_amount)} تومان؛ "
+                f"ارسال ایتا ناموفق بود: {error}"
+            )
 
-total_amount = price * quantity
-message = (
-    f"سفارش شماره {order_id} ثبت و به ایتا ارسال شد. "
-    f"مبلغ کل: {money(total_amount)} تومان"
-    if sent else
-    f"سفارش شماره {order_id} در دیتابیس ثبت شد؛ "
-    f"مبلغ کل: {money(total_amount)} تومان؛ "
-    f"ارسال ایتا ناموفق بود: {error}"
-)  
         return redirect(url_for("index", message=message))
+
     except ValueError:
         return redirect(url_for("index", error="قیمت و تعداد باید عدد باشند"))
     except Exception:
@@ -457,23 +521,40 @@ def api_create_order():
     try:
         data = request.get_json(silent=True) or {}
         price = parse_int(data.get("price"))
-        quantity = parse_int(data.get("quantity"))
+        quantity = parse_int(data.get("quantity"), 1)
         customer_name = str(data.get("customer_name", "")).strip()
         phone = str(data.get("phone", "")).strip()
         product = str(data.get("product", "")).strip()
 
-        if (not customer_name or not phone or not product or price < 0
-                or quantity < 1 or quantity > 100000):
+        if (
+            not customer_name or not phone or not product
+            or price < 0 or quantity < 1 or quantity > 100000
+        ):
             return jsonify(ok=False, error="اطلاعات سفارش نامعتبر است"), 400
 
+        total_amount = price * quantity
         order_id = save_order({
-            "customer_name": customer_name, "phone": phone, "product": product,
-            "quantity": quantity, "price": price, "total": price * quantity,
+            "customer_name": customer_name,
+            "phone": phone,
+            "product": product,
+            "quantity": quantity,
+            "price": price,
+            "total": total_amount,
             "address": str(data.get("address", "")).strip(),
             "description": str(data.get("description", "")).strip()
         })
+
         sent, error = notify_order(order_id)
-        return jsonify(ok=True, order_id=order_id, eitaa_sent=sent, eitaa_error=error), 201
+        return jsonify(
+            ok=True,
+            order_id=order_id,
+            total=total_amount,
+            eitaa_sent=sent,
+            eitaa_error=error
+        ), 201
+
+    except ValueError:
+        return jsonify(ok=False, error="قیمت و تعداد باید عدد باشند"), 400
     except Exception:
         logger.exception("API order failed")
         return jsonify(ok=False, error="خطا در ثبت سفارش"), 500
@@ -511,7 +592,10 @@ ADMIN_PAGE = """
 
 
 def admin_required():
-    return bool(os.getenv("ADMIN_PANEL_KEY", "").strip()) and session.get("admin_logged_in") is True
+    return (
+        bool(os.getenv("ADMIN_PANEL_KEY", "").strip())
+        and session.get("admin_logged_in") is True
+    )
 
 
 @app.route("/admin/login", methods=["GET", "POST"])
@@ -519,6 +603,7 @@ def admin_login():
     admin_key = os.getenv("ADMIN_PANEL_KEY", "").strip()
     if not admin_key:
         return "ADMIN_PANEL_KEY تنظیم نشده است", 503
+
     error = ""
     if request.method == "POST":
         key = request.form.get("key", "")
@@ -526,6 +611,7 @@ def admin_login():
             session["admin_logged_in"] = True
             return redirect(url_for("admin_panel"))
         error = "رمز واردشده صحیح نیست"
+
     return render_template_string(ADMIN_LOGIN, error=error)
 
 
@@ -533,23 +619,35 @@ def admin_login():
 def admin_panel():
     if not admin_required():
         return redirect(url_for("admin_login"))
+
     statuses = ["جدید", "در حال بررسی", "تأیید شده", "در حال ارسال", "تحویل شده", "لغو شده"]
-    return render_template_string(ADMIN_PAGE, orders=get_orders(100), statuses=statuses)
+    return render_template_string(
+        ADMIN_PAGE, orders=get_orders(100), statuses=statuses
+    )
 
 
 @app.post("/admin/status/<order_id>")
 def admin_update_status(order_id):
     if not admin_required():
         return redirect(url_for("admin_login"))
+
     status = request.form.get("status", "").strip()
-    allowed = {"جدید", "در حال بررسی", "تأیید شده", "در حال ارسال", "تحویل شده", "لغو شده"}
+    allowed = {
+        "جدید", "در حال بررسی", "تأیید شده",
+        "در حال ارسال", "تحویل شده", "لغو شده"
+    }
+
     if status in allowed:
         conn = get_connection()
         try:
-            execute_sql(conn, "UPDATE orders SET status = ? WHERE id = ?", (status, order_id))
+            execute_sql(
+                conn, "UPDATE orders SET status = ? WHERE id = ?",
+                (status, order_id)
+            )
             conn.commit()
         finally:
             conn.close()
+
     return redirect(url_for("admin_panel"))
 
 
@@ -557,6 +655,7 @@ def admin_update_status(order_id):
 def admin_retry_eitaa(order_id):
     if not admin_required():
         return redirect(url_for("admin_login"))
+
     notify_order(order_id)
     return redirect(url_for("admin_panel"))
 
@@ -578,10 +677,11 @@ def health():
             execute_sql(conn, "SELECT 1").fetchone()
         finally:
             conn.close()
+
         return jsonify(
             ok=True,
             service="Kalay Kitchen Luxury",
-            database="postgresql" if os.getenv("DATABASE_URL", "").strip() else "sqlite",
+            database="postgresql" if using_postgres() else "sqlite",
             time=datetime.utcnow().isoformat()
         )
     except Exception as exc:
@@ -594,7 +694,7 @@ def db_check():
     try:
         conn = get_connection()
         try:
-            if os.getenv("DATABASE_URL", "").strip():
+            if using_postgres():
                 rows = execute_sql(conn, """
                     SELECT column_name, data_type, is_nullable
                     FROM information_schema.columns
@@ -605,14 +705,23 @@ def db_check():
             else:
                 rows = conn.execute("PRAGMA table_info(orders)").fetchall()
                 columns = [
-                    {"column_name": row["name"], "data_type": row["type"],
-                     "is_nullable": not bool(row["notnull"])}
+                    {
+                        "column_name": row["name"],
+                        "data_type": row["type"],
+                        "is_nullable": not bool(row["notnull"])
+                    }
                     for row in rows
                 ]
-            return jsonify(ok=True, database="postgresql" if os.getenv("DATABASE_URL", "").strip() else "sqlite",
-                           table="orders", columns=columns)
+
+            return jsonify(
+                ok=True,
+                database="postgresql" if using_postgres() else "sqlite",
+                table="orders",
+                columns=columns
+            )
         finally:
             conn.close()
+
     except Exception as exc:
         logger.exception("DB check failed")
         return jsonify(ok=False, error=type(exc).__name__), 500
@@ -624,14 +733,29 @@ def db_check():
 @app.get("/manifest.json")
 def manifest():
     response = make_response(jsonify({
-        "id": "/", "name": APP_NAME, "short_name": "کالای آشپزخانه",
+        "id": "/",
+        "name": APP_NAME,
+        "short_name": "کالای آشپزخانه",
         "description": "فروش آنلاین کالای آشپزخانه لوکس و ثبت سفارش",
-        "lang": "fa", "dir": "rtl", "display": "standalone",
-        "orientation": "any", "scope": "/", "start_url": "/",
-        "background_color": "#ffffff", "theme_color": "#173b35",
+        "lang": "fa",
+        "dir": "rtl",
+        "display": "standalone",
+        "orientation": "any",
+        "scope": "/",
+        "start_url": "/",
+        "background_color": "#ffffff",
+        "theme_color": "#173b35",
         "icons": [
-            {"src": "/static/icon-192.png", "sizes": "192x192", "type": "image/png"},
-            {"src": "/static/icon-512.png", "sizes": "512x512", "type": "image/png"}
+            {
+                "src": "/static/icon-192.png",
+                "sizes": "192x192",
+                "type": "image/png"
+            },
+            {
+                "src": "/static/icon-512.png",
+                "sizes": "512x512",
+                "type": "image/png"
+            }
         ]
     }))
     response.headers["Content-Type"] = "application/manifest+json"
@@ -659,4 +783,8 @@ except Exception:
 
 
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=int(os.getenv("PORT", "5000")), debug=False)
+    app.run(
+        host="0.0.0.0",
+        port=int(os.getenv("PORT", "5000")),
+        debug=False
+    )
