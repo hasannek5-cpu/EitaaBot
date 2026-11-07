@@ -155,7 +155,6 @@ def init_db():
                 )
             """)
 
-            # تکمیل ستون‌های دیتابیس SQLite قدیمی، بدون حذف اطلاعات
             existing = {
                 row["name"] for row in conn.execute("PRAGMA table_info(orders)").fetchall()
             }
@@ -380,7 +379,7 @@ def parse_int(value, default=0):
 
 
 # ==================================================
-# صفحه سفارش
+# صفحه سفارش - طراحی لوکس و واکنش‌گرا
 # ==================================================
 ORDER_PAGE = """
 <!DOCTYPE html>
@@ -389,59 +388,93 @@ ORDER_PAGE = """
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <meta name="theme-color" content="#173b35">
-<meta name="description" content="فروش آنلاین کالای آشپزخانه لوکس">
+<meta name="description" content="فروش آنلاین کالای آشپزخانه لوکس و ثبت سفارش سریع">
 <link rel="manifest" href="/manifest.json">
 <title>کالای آشپزخانه لوکس</title>
 <style>
+:root{--green:#173b35;--green2:#24574c;--gold:#c5a46d;--cream:#f7f4ed;--ink:#202820;--muted:#778078;--line:#e7e6df}
 *{box-sizing:border-box}
-body{margin:0;background:#f4f5f1;color:#202820;font-family:Tahoma,Arial,sans-serif}
-header{background:#173b35;color:white;text-align:center;padding:25px 15px}
-header h1{font-size:23px}
-.container{max-width:600px;margin:25px auto;padding:0 14px}
-.card{background:white;border-radius:15px;padding:22px;box-shadow:0 4px 18px #0000000b}
-label{display:block;margin:15px 0 7px;font-size:14px}
-input,textarea{width:100%;padding:13px;border:1px solid #ddd;border-radius:9px;font-size:15px;font-family:inherit}
-textarea{min-height:90px}
-.total,.notice{background:#edf5ef;padding:14px;border-radius:9px;margin-top:16px;font-weight:bold;color:#173b35;overflow-wrap:anywhere}
-.error{background:#fff0f0;color:#a00;padding:12px;border-radius:8px;overflow-wrap:anywhere}
-button{width:100%;border:0;border-radius:10px;padding:15px;margin-top:20px;background:#173b35;color:white;font-size:16px;font-family:inherit;cursor:pointer}
-footer{text-align:center;color:#777;font-size:12px;padding:25px}
+body{margin:0;background:var(--cream);color:var(--ink);font-family:Tahoma,Arial,sans-serif;line-height:1.8}
+.topbar{background:linear-gradient(135deg,#102d27,#24574c);color:#fff;padding:30px 18px 34px;text-align:center;position:relative;overflow:hidden}
+.topbar:before,.topbar:after{content:"";position:absolute;border:1px solid #ffffff18;border-radius:50%;width:220px;height:220px;pointer-events:none}
+.topbar:before{top:-145px;right:-70px}.topbar:after{bottom:-180px;left:-60px}
+.brand-mark{width:58px;height:58px;margin:0 auto 12px;border:1px solid #d7bd8b;border-radius:18px;display:grid;place-items:center;color:#e6c98f;font-size:27px;background:#ffffff0b}
+.topbar h1{font-size:clamp(21px,5vw,29px);margin:0;font-weight:800;letter-spacing:-.4px}
+.topbar p{margin:8px 0 0;color:#e5ece8;font-size:14px}
+.gold-line{width:62px;height:2px;background:var(--gold);margin:17px auto 0;border-radius:9px}
+.wrap{max-width:650px;margin:0 auto;padding:18px 14px 28px}
+.intro{display:flex;align-items:center;gap:12px;padding:14px 16px;margin:0 0 14px;border:1px solid #e8dfce;background:#fffaf1;border-radius:16px;color:#65563d;font-size:13px}
+.intro-icon{flex:0 0 38px;width:38px;height:38px;display:grid;place-items:center;border-radius:12px;background:#f0e5d0;font-size:19px}
+.card{background:#fff;border:1px solid #eeeee8;border-radius:22px;padding:20px;box-shadow:0 12px 35px #173b3509}
+.card-head{display:flex;align-items:center;gap:10px;margin-bottom:8px}
+.card-head .badge-icon{width:40px;height:40px;display:grid;place-items:center;background:#edf4ef;color:var(--green);border-radius:13px;font-size:20px}
+.card-head h2{font-size:18px;margin:0;color:var(--green)}
+.card-head p{font-size:12px;color:var(--muted);margin:2px 0 0}
+label{display:block;margin:17px 0 7px;font-size:13px;font-weight:700;color:#37443b}
+input,textarea{width:100%;padding:13px 14px;border:1px solid var(--line);border-radius:12px;font-size:15px;font-family:inherit;background:#fcfcfa;color:var(--ink);outline:none;transition:border .2s,box-shadow .2s}
+input:focus,textarea:focus{border-color:#8eaa9b;box-shadow:0 0 0 3px #173b3510;background:#fff}
+input::placeholder,textarea::placeholder{color:#a0a69f;font-size:13px}
+textarea{min-height:88px;resize:vertical}
+.two-col{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+.total-box{display:flex;align-items:center;justify-content:space-between;gap:12px;background:linear-gradient(135deg,#edf4ef,#f5f7f1);border:1px solid #dce9df;border-radius:15px;padding:15px;margin-top:18px;color:var(--green)}
+.total-caption{font-size:13px;font-weight:700}.total-value{font-size:20px;font-weight:900;white-space:nowrap}.total-value small{font-size:12px;font-weight:500}
+.submit-btn{width:100%;border:0;border-radius:14px;padding:15px;margin-top:20px;background:linear-gradient(135deg,#173b35,#2a6254);color:white;font-size:16px;font-weight:700;font-family:inherit;cursor:pointer;box-shadow:0 8px 18px #173b3520;transition:transform .15s,opacity .15s}
+.submit-btn:active{transform:scale(.99)}.submit-btn:disabled{opacity:.65;cursor:wait}
+.notice,.error{padding:14px 15px;border-radius:13px;margin:0 0 16px;font-size:13px;overflow-wrap:anywhere}
+.notice{background:#edf7ef;border:1px solid #d4ead8;color:#20633a}.error{background:#fff1ef;border:1px solid #f2d5d0;color:#a33125}
+.footer{text-align:center;color:#899087;font-size:12px;padding:24px 8px 12px}
+.instagram{display:inline-flex;align-items:center;gap:8px;margin-top:13px;padding:11px 18px;border-radius:13px;background:linear-gradient(120deg,#833ab4,#fd1d1d,#fcb045);color:white;text-decoration:none;font-weight:700;font-size:13px;box-shadow:0 7px 16px #c43b6920}
+.footer-note{margin-top:12px;color:#a0a59e}
+@media(max-width:420px){.card{padding:16px;border-radius:18px}.two-col{gap:9px}.topbar{padding-top:25px}.total-value{font-size:18px}}
 </style>
 </head>
 <body>
-<header><h1>کالای آشپزخانه لوکس</h1><p>ثبت سفارش آسان و سریع</p></header>
-<div class="container"><div class="card">
-{% if message %}<div class="notice">{{ message }}</div>{% endif %}
-{% if error %}<div class="error">{{ error }}</div>{% endif %}
-<form method="POST" action="/order">
-<label>نام و نام خانوادگی *</label><input name="customer_name" required maxlength="150">
-<label>شماره تلفن *</label><input name="phone" required maxlength="30" inputmode="tel">
-<label>نام محصول *</label><input name="product" required maxlength="250">
-<label>قیمت واحد (تومان) *</label><input id="price" name="price" type="text" inputmode="numeric" required>
-<label>تعداد *</label><input id="quantity" name="quantity" type="number" min="1" max="100000" value="1" required>
-<div class="total">مبلغ کل: <span id="total">۰</span> تومان</div>
-<label>آدرس تحویل</label><textarea name="address" maxlength="2000"></textarea>
-<label>توضیحات سفارش</label><textarea name="description" maxlength="2000"></textarea>
-<button type="submit">ثبت سفارش</button>
-</form></div></div>
-<footer>کالای آشپزخانه لوکس<br>
-<a href="https://www.instagram.com/kala_louxs/" target="_blank" rel="noopener noreferrer"
-style="display:inline-block;margin-top:15px;padding:12px 20px;border-radius:12px;background:linear-gradient(135deg,#833ab4,#fd1d1d,#fcb045);color:white;text-decoration:none;font-weight:bold">
-📷 مشاهده پیج اینستاگرام ما</a></footer>
+<header class="topbar">
+<div class="brand-mark">✦</div>
+<h1>کالای آشپزخانه لوکس</h1>
+<p>انتخابی زیبا برای آشپزخانه شما</p>
+<div class="gold-line"></div>
+</header>
+<main class="wrap">
+<div class="intro"><div class="intro-icon">✨</div><div>سفارش خود را در چند مرحله ساده ثبت کنید؛ مبلغ نهایی به‌صورت خودکار محاسبه می‌شود.</div></div>
+<section class="card">
+<div class="card-head"><div class="badge-icon">🛍️</div><div><h2>فرم ثبت سفارش</h2><p>لطفاً اطلاعات سفارش را دقیق وارد کنید.</p></div></div>
+{% if message %}<div class="notice">✓ {{ message }}</div>{% endif %}
+{% if error %}<div class="error">⚠ {{ error }}</div>{% endif %}
+<form id="orderForm" method="POST" action="/order">
+<label for="customer_name">نام و نام خانوادگی <span style="color:#b45309">*</span></label>
+<input id="customer_name" name="customer_name" required maxlength="150" autocomplete="name" placeholder="مثلاً علی رضایی">
+<label for="phone">شماره تلفن <span style="color:#b45309">*</span></label>
+<input id="phone" name="phone" required maxlength="30" inputmode="tel" autocomplete="tel" placeholder="09xxxxxxxxx">
+<label for="product">نام محصول <span style="color:#b45309">*</span></label>
+<input id="product" name="product" required maxlength="250" placeholder="نام کالای موردنظر">
+<div class="two-col">
+<div><label for="price">قیمت واحد (تومان) <span style="color:#b45309">*</span></label><input id="price" name="price" type="text" inputmode="numeric" required placeholder="مثلاً ۳۰۰۰۰۰"></div>
+<div><label for="quantity">تعداد <span style="color:#b45309">*</span></label><input id="quantity" name="quantity" type="number" min="1" max="100000" value="1" required></div>
+</div>
+<div class="total-box"><div class="total-caption">مبلغ نهایی سفارش</div><div class="total-value"><span id="total">۰</span> <small>تومان</small></div></div>
+<label for="address">آدرس تحویل</label><textarea id="address" name="address" maxlength="2000" autocomplete="street-address" placeholder="آدرس کامل برای تحویل سفارش"></textarea>
+<label for="description">توضیحات سفارش</label><textarea id="description" name="description" maxlength="2000" placeholder="رنگ، مدل یا توضیح تکمیلی (اختیاری)"></textarea>
+<button class="submit-btn" id="submitBtn" type="submit">ثبت نهایی سفارش ←</button>
+</form>
+</section>
+<footer class="footer">کالای آشپزخانه لوکس<br>
+<a class="instagram" href="https://www.instagram.com/kala_louxs/" target="_blank" rel="noopener noreferrer">📷 مشاهده پیج اینستاگرام ما</a>
+<div class="footer-note">تجربه خریدی ساده، سریع و مطمئن</div>
+</footer>
+</main>
 <script>
 const p=document.getElementById('price'),q=document.getElementById('quantity'),t=document.getElementById('total');
-function digits(x){
-  return String(x)
-    .replace(/[۰-۹]/g,d=>'۰۱۲۳۴۵۶۷۸۹'.indexOf(d))
-    .replace(/[٠-٩]/g,d=>'٠١٢٣٤٥٦٧٨٩'.indexOf(d));
-}
+const form=document.getElementById('orderForm'),btn=document.getElementById('submitBtn');
+function digits(x){return String(x).replace(/[۰-۹]/g,d=>'۰۱۲۳۴۵۶۷۸۹'.indexOf(d)).replace(/[٠-٩]/g,d=>'٠١٢٣٤٥٦٧٨٩'.indexOf(d));}
 function calc(){
-  let a=parseInt(digits(p.value).replace(/[٬,\\s]/g,''))||0;
-  let b=parseInt(q.value)||0;
-  t.textContent=(a*b).toLocaleString('fa-IR');
+ const a=parseInt(digits(p.value).replace(/[٬,\\s]/g,''))||0;
+ const b=parseInt(digits(q.value))||0;
+ t.textContent=(a*b).toLocaleString('fa-IR');
 }
-p.addEventListener('input',calc);
-q.addEventListener('input',calc);
+p.addEventListener('input',calc);q.addEventListener('input',calc);
+form.addEventListener('submit',()=>{btn.disabled=true;btn.textContent='در حال ثبت سفارش…';});
+calc();
 </script>
 </body></html>
 """
