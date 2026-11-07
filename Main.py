@@ -630,7 +630,17 @@ value="1" required>
 </div>
 </div>
 
-<footer>کالای آشپزخانه لوکس</footer>
+HTML
+<footer>
+کالای آشپزخانه لوکس
+<br>
+<a href="https://www.instagram.com/kala_louxs/"
+target="_blank"
+rel="noopener noreferrer"
+style="display:inline-block;margin-top:15px;padding:12px 20px;border-radius:12px;background:linear-gradient(135deg,#833ab4,#fd1d1d,#fcb045);color:white;text-decoration:none;font-weight:bold">
+📷 مشاهده پیج اینستاگرام ما
+</a>
+</footer>
 
 <script>
 const p=document.getElementById('price');
