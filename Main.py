@@ -430,11 +430,16 @@ def create_order():
         })
         sent, error = notify_order(order_id)
 
-        message = (
-            f"سفارش شماره {order_id} ثبت و به ایتا ارسال شد."
-            if sent else
-            f"سفارش شماره {order_id} در دیتابیس ثبت شد؛ ارسال ایتا ناموفق بود: {error}"
-        )
+total_amount = price * quantity
+
+message = (
+    f"سفارش شماره {order_id} ثبت و به ایتا ارسال شد. "
+    f"مبلغ کل: {money(total_amount)} تومان"
+    if sent else
+    f"سفارش شماره {order_id} در دیتابیس ثبت شد؛ "
+    f"مبلغ کل: {money(total_amount)} تومان؛ "
+    f"ارسال ایتا ناموفق بود: {error}"
+)  
         return redirect(url_for("index", message=message))
     except ValueError:
         return redirect(url_for("index", error="قیمت و تعداد باید عدد باشند"))
