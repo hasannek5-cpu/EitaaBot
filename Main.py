@@ -447,6 +447,26 @@ def send_eitaa_message(message):
         logger.exception("Eitaa sending failed")
         return False, str(exc)[:1000]
 
+def notify_order(order_id):
+    """ارسال سفارش ثبت‌شده به ایتا و ذخیره نتیجه"""
+
+    order = fetch_order(order_id)
+
+    if not order:
+        return False, "سفارش در دیتابیس پیدا نشد"
+
+    message = make_order_message(order)
+    sent, error = send_eitaa_message(message)
+
+    try:
+        update_eitaa_result(order_id, sent, error)
+    except Exception:
+        logger.exception(
+            "Could not save Eitaa result for order %s",
+            order_id
+        )
+
+    return sent, error
 
 
 # ==================================================
